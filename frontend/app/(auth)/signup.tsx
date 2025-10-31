@@ -119,7 +119,7 @@ export default function SignUp() {
         </View>
 
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <TouchableOpacity onPress={() => router.push('/(auth)/signin')} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#666" />
           </TouchableOpacity>
           <Text style={styles.title}>Sign up</Text>

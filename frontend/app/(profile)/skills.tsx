@@ -1,9 +1,8 @@
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
 
 export default function SkillsDetails() {
   const router = useRouter();
@@ -12,6 +11,28 @@ export default function SkillsDetails() {
   const [technicalDomains, setTechnicalDomains] = useState('');
   const [experience, setExperience] = useState('0-3 yrs');
   const [preferredCity, setPreferredCity] = useState('');
+
+  // Load saved data when component mounts
+  useEffect(() => {
+    const loadSkillsData = async () => {
+      try {
+        const savedData = await AsyncStorage.getItem('skills');
+        if (savedData) {
+          const data = JSON.parse(savedData);
+          setSkills(Array.isArray(data.skills) ? data.skills.join(', ') : '');
+          setInterests(Array.isArray(data.interests) ? data.interests.join(', ') : '');
+          setTechnicalDomains(Array.isArray(data.technical_domains) ? data.technical_domains.join(', ') : '');
+          setExperience(data.experience || '0-3 yrs');
+          setPreferredCity(data.preferred_city || '');
+          console.log('✅ Loaded skills data:', data);
+        }
+      } catch (error) {
+        console.error('Error loading skills data:', error);
+      }
+    };
+    
+    loadSkillsData();
+  }, []);
 
   const handleNext = async () => {
     if (!skills || !interests || !technicalDomains || !experience || !preferredCity) {
@@ -37,7 +58,7 @@ export default function SkillsDetails() {
     >
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <TouchableOpacity onPress={() => router.push('/(profile)/education')} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#666" />
           </TouchableOpacity>
           <Text style={styles.title}>Skills and Competencies</Text>

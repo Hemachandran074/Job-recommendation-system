@@ -17,15 +17,28 @@ export default function PersonalDetails() {
   const [mobile, setMobile] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Pre-populate name and email from AsyncStorage
+  // Pre-populate all fields from AsyncStorage (including previously entered data)
   useEffect(() => {
     const loadUserData = async () => {
       try {
         const userName = await AsyncStorage.getItem('userName');
         const userEmail = await AsyncStorage.getItem('userEmail');
+        const savedPersonalData = await AsyncStorage.getItem('personalData');
         
-        if (userName) setName(userName);
-        if (userEmail) setEmail(userEmail);
+        if (savedPersonalData) {
+          // Load previously saved personal data
+          const data = JSON.parse(savedPersonalData);
+          setName(data.name || userName || '');
+          setDob(data.dob || '');
+          setGender(data.gender || 'Male');
+          setEmail(data.email || userEmail || '');
+          setMobile(data.mobile || '');
+          console.log('✅ Loaded personal data:', data);
+        } else {
+          // First time - use signup data
+          if (userName) setName(userName);
+          if (userEmail) setEmail(userEmail);
+        }
       } catch (error) {
         console.error('Error loading user data:', error);
       }
@@ -42,6 +55,12 @@ export default function PersonalDetails() {
 
     try {
       setLoading(true);
+      
+      // Save personal data to AsyncStorage for persistence
+      await AsyncStorage.setItem('personalData', JSON.stringify({
+        name, dob, gender, email, mobile
+      }));
+      console.log('💾 Saved personal data to AsyncStorage');
       
       // Get stored education and skills data
       const educationData = JSON.parse(await AsyncStorage.getItem('education') || '{}');
@@ -66,17 +85,23 @@ export default function PersonalDetails() {
       // Combine all skills, interests, and domains into one array
       const allSkills = [...new Set([...skillsArray, ...interestsArray, ...technicalDomains])];
 
-      // Prepare complete profile data for backend
+      // Prepare complete profile data for backend - match Supabase schema
       const profileData = {
-        name: name.trim(),
+        full_name: name.trim(),
         email: email.trim().toLowerCase(),
-        phone: mobile.trim(),
+        mobile: mobile.trim(),
         location: skillsDataRaw.preferred_city || educationData.location || '',
-        bio: `${educationData.degree || ''} student from ${educationData.institute || 'university'}, interested in ${allSkills.slice(0, 3).join(', ') || 'various fields'}. ${skillsDataRaw.experience || 0} years of experience.`,
+        about: `${educationData.degree || ''} student from ${educationData.institute || 'university'}, interested in ${allSkills.slice(0, 3).join(', ') || 'various fields'}. ${skillsDataRaw.experience || 0} years of experience.`,
         skills: allSkills,
-        linkedin: '', // You can add these fields to the form later
-        github: '',
-        portfolio: '',
+        interests: interestsArray,
+        technical_domains: technicalDomains,
+        // Education fields
+        degree: educationData.degree || '',
+        stream: educationData.stream || '',
+        graduation_year: educationData.graduation_year || '',
+        experience: skillsDataRaw.experience || '',
+        preferred_city: skillsDataRaw.preferred_city || '',
+        // resume_url will be added when user uploads resume
       };
 
       console.log('📦 Prepared profile data:', profileData);
@@ -93,6 +118,8 @@ export default function PersonalDetails() {
       // Clear temporary storage
       await AsyncStorage.removeItem('education');
       await AsyncStorage.removeItem('skills');
+      await AsyncStorage.removeItem('personalData');
+      console.log('🧹 Cleared temporary profile data from AsyncStorage');
 
       // Update profile context with complete data
       await setProfile({
@@ -113,26 +140,22 @@ export default function PersonalDetails() {
         },
       });
 
-      // Show success and redirect to dashboard
-      Alert.alert(
-        'Success! 🎉',
-        'Your profile has been saved successfully!',
-        [
-          {
-            text: 'Go to Dashboard',
-            onPress: () => router.replace('/dashboard'),
-          }
-        ]
-      );
+      console.log('✅ Profile saved successfully! Redirecting to dashboard...');
+
+      // Stop loading
+      setLoading(false);
+
+      // Automatically redirect to dashboard without alert
+      console.log('🚀 Navigating to dashboard...');
+      router.replace('/dashboard');
 
     } catch (error: any) {
       console.log('📦 Profile submit error details:', error.response?.data || error.message || error);
       console.error('❌ Profile submit error:', error);
       console.error('Error details:', error.response?.data);
       
-      const errorMessage = error.response?.data?.detail || error.message || 'Failed to save profile';
+      const errorMessage = error.response?.data?.message || error.response?.data?.detail || error.message || 'Failed to save profile';
       Alert.alert('Error', errorMessage);
-    } finally {
       setLoading(false);
     }
   };
@@ -144,7 +167,7 @@ export default function PersonalDetails() {
     >
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <TouchableOpacity onPress={() => router.push('/(profile)/skills')} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#666" />
           </TouchableOpacity>
           <Text style={styles.title}>Personal Details</Text>

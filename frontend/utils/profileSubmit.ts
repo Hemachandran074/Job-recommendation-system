@@ -35,18 +35,20 @@ export const submitCompleteProfile = async (profileData: ProfileData) => {
       throw new Error('User not authenticated');
     }
 
-    // Prepare data for backend
+    // Prepare data for backend - match Supabase profiles table schema
     const backendData = {
-      name: profileData.personal?.fullName,
+      full_name: profileData.personal?.fullName,
       email: profileData.personal?.email,
-      phone: profileData.personal?.phone,
+      mobile: profileData.personal?.phone, // maps phone to mobile
       location: profileData.personal?.location,
-      bio: profileData.personal?.bio,
-      linkedin: profileData.personal?.linkedin,
-      github: profileData.personal?.github,
-      portfolio: profileData.personal?.portfolio,
+      about: profileData.personal?.bio, // maps bio to about
       skills: profileData.skills || [],
-      // Add education fields when backend schema supports it
+      // Education fields
+      degree: profileData.education?.degree,
+      stream: profileData.education?.institution, // or create a separate stream field
+      graduation_year: profileData.education?.graduationYear,
+      // Optional fields can be added later
+      // linkedin, github, portfolio not in current schema - would need to be added to profiles table
     };
 
     console.log('📤 Submitting profile data:', backendData);

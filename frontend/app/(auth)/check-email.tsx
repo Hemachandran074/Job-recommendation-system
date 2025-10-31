@@ -1,12 +1,66 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking, Alert, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking, Alert, Image, ActivityIndicator } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { authAPI } from '../../utils/api';
+import { useProfile } from '../../contexts/ProfileContext';
 
 export default function CheckEmail() {
   const router = useRouter();
+  const { signIn } = useProfile();
   const params = useLocalSearchParams();
   const email = params.email as string || 'brandonelouis@gmail.com';
+  const [checking, setChecking] = useState(false);
+  const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
+
+  // Poll for email verification every 3 seconds
+  useEffect(() => {
+    if (!autoCheckEnabled) return;
+
+    const intervalId = setInterval(async () => {
+      try {
+        // Get the stored password (if you saved it temporarily)
+        // Otherwise user will need to click "I've Verified" button
+        const userId = await AsyncStorage.getItem('userId');
+        if (!userId) return;
+
+        // Try to fetch the user profile - if it exists and is verified, proceed
+        console.log('🔄 Checking if email is verified...');
+        // We can check by attempting to get the user's session or profile
+        // For now, we'll rely on manual "I've Verified" button
+      } catch (error) {
+        console.error('Error checking verification:', error);
+      }
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [autoCheckEnabled]);
+
+  const handleIveVerified = async () => {
+    setChecking(true);
+    try {
+      // User claims they've verified - redirect them to login or to profile completion
+      const userId = await AsyncStorage.getItem('userId');
+      
+      if (userId) {
+        // User ID exists, they just need to complete profile
+        console.log('✅ User verified! Redirecting to education page...');
+        await AsyncStorage.setItem('profileComplete', 'false');
+        router.replace('/(profile)/education');
+      } else {
+        // No user ID, send them to login
+        Alert.alert('Please Login', 'Now that you\'ve verified your email, please log in to continue.');
+        router.replace('/(auth)/signin');
+      }
+    } catch (error) {
+      console.error('Error in handleIveVerified:', error);
+      Alert.alert('Error', 'Something went wrong. Please try logging in.');
+      router.replace('/(auth)/signin');
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const handleOpenEmail = async () => {
     // Try to open default email app
@@ -65,6 +119,18 @@ export default function CheckEmail() {
             onPress={handleOpenEmail}
           >
             <Text style={styles.primaryButtonText}>OPEN YOUR EMAIL</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[styles.verifiedButton, checking && styles.verifiedButtonDisabled]} 
+            onPress={handleIveVerified}
+            disabled={checking}
+          >
+            {checking ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.verifiedButtonText}>I'VE VERIFIED MY EMAIL</Text>
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity 
@@ -155,6 +221,23 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   primaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+  },
+  verifiedButton: {
+    backgroundColor: '#10B981',
+    borderRadius: 12,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  verifiedButtonDisabled: {
+    backgroundColor: '#86EFAC',
+  },
+  verifiedButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: 'bold',

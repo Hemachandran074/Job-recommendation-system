@@ -1,1214 +1,988 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, Modal, RefreshControl } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useState, useEffect, useCallback } from 'react';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import { useProfile } from '../contexts/ProfileContext';
-import { userAPI, resumeAPI } from '../utils/api';
-import * as DocumentPicker from 'expo-document-picker';
-import React from 'react';
-import ProfileCard from '../components/ui/ProfileCard';
-
-interface WorkExperience {
-  id: string;
-  position: string;
-  company: string;
-  duration: string;
-  years: string;
-}
-
-interface Education {
-  id: string;
-  degree: string;
-  institution: string;
-  duration: string;
-  years: string;
-}
-
-interface Resume {
-  id: string;
-  name: string;
-  size: string;
-  uploadDate: string;
-}
-
-interface UserProfileData {
-  id: string;
-  name: string;
-  email: string;
-  phone?: string;
-  location?: string;
-  bio?: string;
-  skills?: string[];
-  experience_level?: string;
-  experience_years?: number;
-  linkedin?: string;
-  github?: string;
-  portfolio?: string;
-  preferred_job_titles?: string[];
-  preferred_locations?: string[];
-  preferred_job_type?: string;
-}
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { userAPI } from '../utils/api';
 
 export default function Profile() {
   const router = useRouter();
-  const { authUser, signOut } = useProfile();
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [userId, setUserId] = useState('');
+  const [userName, setUserName] = useState('');
+  const [userEmail, setUserEmail] = useState('');
+  
+  // Section expansion states
+  const [expandedSections, setExpandedSections] = useState({
+    about: false,
+    education: false,
+    skills: false,
+  });
+  
+  // Edit mode states
   const [editingSection, setEditingSection] = useState<string | null>(null);
   
-  // User profile data from backend
-  const [profileData, setProfileData] = useState<UserProfileData | null>(null);
-  const [aboutText, setAboutText] = useState('');
+  // Profile data from backend
+  const [profileData, setProfileData] = useState<any>(null);
   
-  // Work Experience State
-  const [workExperience, setWorkExperience] = useState<WorkExperience[]>([]);
-
-  // Education State
-  const [education, setEducation] = useState<Education[]>([]);
-
-  // Skills State
-  const [skills, setSkills] = useState<string[]>([]);
-
-  // Languages State
-  const [languages, setLanguages] = useState<string[]>([]);
-
-  // Resume State
-  const [resumes, setResumes] = useState<Resume[]>([]);
-
-  const [showModal, setShowModal] = useState(false);
-  const [modalType, setModalType] = useState<'work' | 'education' | 'skill' | 'language'>('work');
-  const [editingItem, setEditingItem] = useState<any>(null);
-
-  // Modal form states
-  const [formData, setFormData] = useState({
-    position: '',
-    company: '',
-    duration: '',
-    years: '',
+  // Edit form states
+  const [editForm, setEditForm] = useState({
+    full_name: '',
+    email: '',
+    mobile: '',
+    about: '',
     degree: '',
-    institution: '',
-    skill: '',
-    language: ''
+    stream: '',
+    graduation_year: '',
+    experience: '',
+    preferred_city: '',
   });
+  
+  // Skills management
+  const [newSkillInput, setNewSkillInput] = useState('');
+  const [newInterestInput, setNewInterestInput] = useState('');
+  const [newDomainInput, setNewDomainInput] = useState('');
 
-  // Load profile data from backend
-  const loadProfileData = useCallback(async () => {
-    if (!authUser?.id) {
-      setLoading(false);
-      return;
-    }
+  // Load profile data on mount
+  useEffect(() => {
+    loadProfile();
+  }, []);
 
+  const loadProfile = async () => {
     try {
-      console.log('� Loading profile for user:', authUser.id);
-      const data = await userAPI.getProfile(authUser.id);
-      console.log('📦 Profile data received:', data);
+      console.log('🔍 Loading profile...');
       
-      setProfileData(data);
-      setAboutText(data.bio || 'No bio added yet. Click edit to add your professional summary.');
-      setSkills(data.skills || []);
+      // Get data from AsyncStorage
+      const storedUserId = await AsyncStorage.getItem('userId');
+      const storedName = await AsyncStorage.getItem('userName');
+      const storedEmail = await AsyncStorage.getItem('userEmail');
       
-      // Map backend data to UI format
-      // Note: Backend doesn't have work_experience, education_details yet
-      // These will be added when resume is uploaded
+      console.log('📱 AsyncStorage - userId:', storedUserId);
+      console.log('📱 AsyncStorage - userName:', storedName);
+      console.log('📱 AsyncStorage - userEmail:', storedEmail);
       
+      if (storedUserId) {
+        setUserId(storedUserId);
+        setUserName(storedName || '');
+        setUserEmail(storedEmail || '');
+        
+        // Fetch full profile from backend
+        console.log('🌐 Fetching profile from backend for userId:', storedUserId);
+        const response = await userAPI.getProfile(storedUserId);
+        console.log('✅ Profile response received:', response);
+        
+        // Backend returns {status: 'ok', data: {...}}, so extract the actual data
+        const profileData = response?.data || response;
+        console.log('📦 Extracted profile data:', profileData);
+        console.log('  📊 Skills:', profileData?.skills);
+        console.log('  📚 Education:', profileData?.degree, profileData?.stream, profileData?.graduation_year);
+        console.log('  📱 Contact:', profileData?.mobile, profileData?.email);
+        console.log('  💼 Experience:', profileData?.experience);
+        console.log('  📍 Location:', profileData?.preferred_city);
+        
+        setProfileData(profileData);
+        
+        // Initialize edit form with current data
+        setEditForm({
+          full_name: profileData?.full_name || storedName || '',
+          email: profileData?.email || storedEmail || '',
+          mobile: profileData?.mobile || '',
+          about: profileData?.about || '',
+          degree: profileData?.degree || '',
+          stream: profileData?.stream || '',
+          graduation_year: profileData?.graduation_year || '',
+          experience: profileData?.experience || '',
+          preferred_city: profileData?.preferred_city || '',
+        });
+      } else {
+        console.log('⚠️ No userId found in AsyncStorage');
+        Alert.alert('Error', 'Please sign in again');
+        router.push('/(auth)/signin');
+      }
     } catch (error: any) {
       console.error('❌ Error loading profile:', error);
-      Alert.alert('Error', error.response?.data?.detail || 'Failed to load profile data');
+      Alert.alert('Error', 'Failed to load profile data');
     } finally {
       setLoading(false);
     }
-  }, [authUser]);
-
-  // Pull to refresh
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await loadProfileData();
-    setRefreshing(false);
-  }, [loadProfileData]);
-
-  useEffect(() => {
-    loadProfileData();
-  }, [loadProfileData]);
-
-  const openEditModal = (type: 'work' | 'education' | 'skill' | 'language', item?: any) => {
-    setModalType(type);
-    setEditingItem(item);
-    if (item) {
-      setFormData({
-        position: item.position || '',
-        company: item.company || '',
-        duration: item.duration || '',
-        years: item.years || '',
-        degree: item.degree || '',
-        institution: item.institution || '',
-        skill: item.skill || '',
-        language: item.language || ''
-      });
-    } else {
-      setFormData({
-        position: '',
-        company: '',
-        duration: '',
-        years: '',
-        degree: '',
-        institution: '',
-        skill: '',
-        language: ''
-      });
-    }
-    setShowModal(true);
   };
 
-  const handleSaveItem = () => {
-    if (modalType === 'work') {
-      if (editingItem) {
-        setWorkExperience(prev => prev.map(item => 
-          item.id === editingItem.id 
-            ? { ...item, position: formData.position, company: formData.company, duration: formData.duration, years: formData.years }
-            : item
-        ));
-      } else {
-        const newItem: WorkExperience = {
-          id: Date.now().toString(),
-          position: formData.position,
-          company: formData.company,
-          duration: formData.duration,
-          years: formData.years
-        };
-        setWorkExperience(prev => [...prev, newItem]);
-      }
-    } else if (modalType === 'education') {
-      if (editingItem) {
-        setEducation(prev => prev.map(item => 
-          item.id === editingItem.id 
-            ? { ...item, degree: formData.degree, institution: formData.institution, duration: formData.duration, years: formData.years }
-            : item
-        ));
-      } else {
-        const newItem: Education = {
-          id: Date.now().toString(),
-          degree: formData.degree,
-          institution: formData.institution,
-          duration: formData.duration,
-          years: formData.years
-        };
-        setEducation(prev => [...prev, newItem]);
-      }
-    } else if (modalType === 'skill') {
-      if (formData.skill.trim() && !skills.includes(formData.skill.trim())) {
-        setSkills(prev => [...prev, formData.skill.trim()]);
-      }
-    } else if (modalType === 'language') {
-      if (formData.language.trim() && !languages.includes(formData.language.trim())) {
-        setLanguages(prev => [...prev, formData.language.trim()]);
-      }
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [section]: !prev[section as keyof typeof prev]
+    }));
+  };
+
+  const startEdit = (section: string) => {
+    setEditingSection(section);
+    // Auto-expand the section when editing
+    setExpandedSections(prev => ({ ...prev, [section]: true }));
+  };
+
+  const cancelEdit = () => {
+    setEditingSection(null);
+    // Reset form to current data
+    if (profileData) {
+      setEditForm({
+        full_name: profileData.full_name || userName,
+        email: profileData.email || userEmail,
+        mobile: profileData.mobile || '',
+        about: profileData.about || '',
+        degree: profileData.degree || '',
+        stream: profileData.stream || '',
+        graduation_year: profileData.graduation_year || '',
+        experience: profileData.experience || '',
+        preferred_city: profileData.preferred_city || '',
+      });
     }
+  };
+
+  const saveSection = async (section: string) => {
+    if (!userId) return;
     
-    setShowModal(false);
-    setEditingItem(null);
-  };
-
-  const deleteItem = (type: 'work' | 'education' | 'skill' | 'language', id: string) => {
-    Alert.alert(
-      'Delete Item',
-      'Are you sure you want to delete this item?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
-          style: 'destructive',
-          onPress: () => {
-            if (type === 'work') {
-              setWorkExperience(prev => prev.filter(item => item.id !== id));
-            } else if (type === 'education') {
-              setEducation(prev => prev.filter(item => item.id !== id));
-            } else if (type === 'skill') {
-              setSkills(prev => prev.filter(skill => skill !== id));
-            } else if (type === 'language') {
-              setLanguages(prev => prev.filter(lang => lang !== id));
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  const saveProfile = async () => {
-    if (!authUser?.id || !profileData) {
-      Alert.alert('Error', 'No profile data to save');
-      return;
-    }
-
+    setSaving(true);
     try {
-      const updatedProfile = {
-        name: profileData.name,
-        bio: aboutText,
-        skills: skills,
-        // Add other fields as needed
-      };
+      let updateData = {};
       
-      await userAPI.updateProfile(authUser.id, updatedProfile);
+      if (section === 'about') {
+        updateData = {
+          full_name: editForm.full_name,
+          email: editForm.email,
+          mobile: editForm.mobile,
+          about: editForm.about,
+        };
+      } else if (section === 'education') {
+        updateData = {
+          degree: editForm.degree,
+          stream: editForm.stream,
+          graduation_year: editForm.graduation_year,
+          experience: editForm.experience,
+          preferred_city: editForm.preferred_city,
+        };
+      }
+      
+      console.log('💾 Saving section:', section, 'with data:', updateData);
+      const response = await userAPI.updateProfile(userId, updateData);
+      
+      // Backend returns {status: 'ok', data: {...}}, extract the actual data
+      const updatedProfile = response?.data || response;
+      console.log('✅ Update response:', updatedProfile);
+      
+      // Update local state with the complete updated profile
+      setProfileData((prev: any) => ({
+        ...prev,
+        ...updatedProfile,
+      }));
+      
+      // Also update edit form with new values
+      setEditForm((prev: any) => ({
+        ...prev,
+        ...updateData,
+      }));
+      
+      setEditingSection(null);
       Alert.alert('Success', 'Profile updated successfully!');
-      await loadProfileData(); // Reload to get latest data
     } catch (error: any) {
-      console.error('❌ Profile update error:', error);
-      Alert.alert('Error', error.response?.data?.detail || 'Failed to update profile');
+      console.error('❌ Error saving profile:', error);
+      Alert.alert('Error', 'Failed to update profile');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleUploadResume = async () => {
+  const addSkill = async (type: 'skills' | 'interests' | 'technical_domains', value: string) => {
+    if (!userId || !value.trim()) return;
+    
     try {
-      // Pick document
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-        copyToCacheDirectory: true,
-      });
-
-      console.log('📄 Document picker result:', result);
-
-      if (result.canceled) {
+      const currentArray = profileData?.[type] || [];
+      if (currentArray.includes(value.trim())) {
+        Alert.alert('Info', 'This item already exists');
         return;
       }
-
-      const file = result.assets[0];
       
-      // Validate file size (max 5MB)
-      if (file.size && file.size > 5 * 1024 * 1024) {
-        Alert.alert('Error', 'File size must be less than 5MB');
-        return;
-      }
-
-      // Show loading
-      Alert.alert('Uploading', 'Processing your resume with AI...');
-
-      // Upload to backend
-      console.log('📤 Uploading resume:', {
-        uri: file.uri,
-        name: file.name,
-        type: file.mimeType,
+      const updatedArray = [...currentArray, value.trim()];
+      
+      console.log(`➕ Adding ${type}:`, value);
+      const response = await userAPI.updateProfile(userId, {
+        [type]: updatedArray,
       });
-
-      const response = await resumeAPI.uploadResume(
-        file.uri,
-        file.name,
-        file.mimeType || 'application/pdf'
-      );
-
-      console.log('✅ Resume upload response:', response);
-
-      // Reload profile to get extracted data
-      await loadProfileData();
-
-      Alert.alert(
-        'Success',
-        'Resume uploaded and processed! Your profile has been updated with extracted information.',
-        [{ text: 'OK' }]
-      );
-
+      
+      // Backend returns {status: 'ok', data: {...}}, extract the actual data
+      const updatedProfile = response?.data || response;
+      
+      setProfileData((prev: any) => ({
+        ...prev,
+        ...updatedProfile,
+      }));
+      
+      // Clear input
+      if (type === 'skills') setNewSkillInput('');
+      else if (type === 'interests') setNewInterestInput('');
+      else setNewDomainInput('');
+      
     } catch (error: any) {
-      console.error('❌ Resume upload error:', error);
-      Alert.alert(
-        'Upload Failed',
-        error.response?.data?.detail || error.message || 'Failed to upload resume'
-      );
+      console.error(`❌ Error adding ${type}:`, error);
+      Alert.alert('Error', `Failed to add ${type}`);
     }
   };
 
-  const handleEditProfile = () => {
-    // Navigate to profile editing sections
+  const removeSkill = async (type: 'skills' | 'interests' | 'technical_domains', value: string) => {
+    if (!userId) return;
+    
+    try {
+      const currentArray = profileData?.[type] || [];
+      const updatedArray = currentArray.filter((item: string) => item !== value);
+      
+      console.log(`➖ Removing ${type}:`, value);
+      const response = await userAPI.updateProfile(userId, {
+        [type]: updatedArray,
+      });
+      
+      // Backend returns {status: 'ok', data: {...}}, extract the actual data
+      const updatedProfile = response?.data || response;
+      
+      setProfileData((prev: any) => ({
+        ...prev,
+        ...updatedProfile,
+      }));
+      
+    } catch (error: any) {
+      console.error(`❌ Error removing ${type}:`, error);
+      Alert.alert('Error', `Failed to remove ${type}`);
+    }
+  };
+
+  const handleSignOut = async () => {
     Alert.alert(
-      'Edit Profile',
-      'Choose what you want to edit:',
+      'Sign Out',
+      'Are you sure you want to sign out?',
       [
-        {
-          text: 'Personal Info',
-          onPress: () => router.push('/(profile)/personal' as any),
-        },
-        {
-          text: 'Education',
-          onPress: () => router.push('/(profile)/education' as any),
-        },
-        {
-          text: 'Skills',
-          onPress: () => router.push('/(profile)/skills' as any),
-        },
         { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            await AsyncStorage.clear();
+            router.replace('/(auth)/signin');
+          },
+        },
       ]
     );
   };
 
-  if (loading && !profileData) {
+  if (loading) {
     return (
-      <View style={styles.container}>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <Text style={styles.loadingText}>Loading profile...</Text>
-        </View>
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#4A90E2" />
+        <Text style={styles.loadingText}>Loading profile...</Text>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      <ScrollView 
-        style={styles.scrollContainer} 
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-      >
-        {/* Profile Section with Background */}
-        <View style={styles.profileSectionWrapper}>
-          {/* Background ProfileCard */}
-          <View style={styles.profileCardBackground}>
-            <ProfileCard />
-          </View>
-          
-          {/* Header - Positioned absolutely on top */}
-          <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-              <Ionicons name="arrow-back" size={24} color="#FFF" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.settingsButton} onPress={handleEditProfile}>
-              <Ionicons name="pencil" size={24} color="#FFF" />
-            </TouchableOpacity>
-          </View>
-
-          {/* Profile Content - Positioned absolutely on top */}
-          <View style={styles.profileSection}>
-            <View style={styles.profileImageContainer}>
-              <View style={styles.profileImage}>
-                <Text style={styles.profileImageText}>
-                  {profileData?.name?.charAt(0).toUpperCase() || '👤'}
-                </Text>
-              </View>
-            </View>
-            <Text style={styles.profileName}>{profileData?.name || 'User'}</Text>
-            <Text style={styles.profileLocation}>
-              {profileData?.location || 'Location not set'}
-            </Text>
-            
-            <TouchableOpacity style={styles.editProfileButton} onPress={handleEditProfile}>
-              <Text style={styles.editProfileText}>Edit profile</Text>
-              <Ionicons name="pencil" size={16} color="#FFF" />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Resume Upload Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionTitleContainer}>
-              <Ionicons name="cloud-upload-outline" size={20} color="#4285F4" />
-              <Text style={styles.sectionTitle}>Upload Resume</Text>
-            </View>
-          </View>
-          
-          <TouchableOpacity style={styles.uploadButton} onPress={handleUploadResume}>
-            <Ionicons name="document-text-outline" size={32} color="#4285F4" />
-            <Text style={styles.uploadButtonText}>Upload PDF or DOCX</Text>
-            <Text style={styles.uploadButtonSubtext}>AI will extract your information automatically</Text>
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerContent}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color="#FFF" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>My Profile</Text>
+          <TouchableOpacity onPress={handleSignOut} style={styles.signOutButton}>
+            <Ionicons name="log-out-outline" size={24} color="#FFF" />
           </TouchableOpacity>
         </View>
+      </View>
 
-        {/* Contact Information Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionTitleContainer}>
-              <Ionicons name="mail-outline" size={20} color="#4285F4" />
-              <Text style={styles.sectionTitle}>Contact Information</Text>
-            </View>
-          </View>
-          
-          <View style={styles.infoRow}>
-            <Ionicons name="mail" size={16} color="#666" />
-            <Text style={styles.infoText}>{profileData?.email || 'Not provided'}</Text>
-          </View>
-          
-          <View style={styles.infoRow}>
-            <Ionicons name="call" size={16} color="#666" />
-            <Text style={styles.infoText}>{profileData?.phone || 'Not provided'}</Text>
-          </View>
-          
-          <View style={styles.infoRow}>
-            <Ionicons name="location" size={16} color="#666" />
-            <Text style={styles.infoText}>{profileData?.location || 'Not provided'}</Text>
-          </View>
-        </View>
-
-        {/* About Me Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionTitleContainer}>
-              <Ionicons name="person-circle-outline" size={20} color="#4285F4" />
-              <Text style={styles.sectionTitle}>About me</Text>
-            </View>
-            <TouchableOpacity onPress={() => setEditingSection(editingSection === 'about' ? null : 'about')}>
-              <Ionicons name="pencil" size={16} color="#4285F4" />
-            </TouchableOpacity>
-          </View>
-          
-          {editingSection === 'about' ? (
-            <View>
-              <TextInput
-                style={styles.textArea}
-                value={aboutText}
-                onChangeText={setAboutText}
-                multiline
-                numberOfLines={4}
-              />
-              <TouchableOpacity 
-                style={styles.saveButton} 
-                onPress={() => {
-                  setEditingSection(null);
-                  saveProfile();
-                }}
-              >
-                <Text style={styles.saveButtonText}>Save</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <Text style={styles.aboutText}>{aboutText}</Text>
-          )}
-        </View>
-
-        {/* Skills Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionTitleContainer}>
-              <MaterialIcons name="psychology" size={20} color="#4285F4" />
-              <Text style={styles.sectionTitle}>Skills</Text>
-            </View>
-            <TouchableOpacity onPress={() => openEditModal('skill')}>
-              <Ionicons name="pencil" size={16} color="#4285F4" />
-            </TouchableOpacity>
-          </View>
-          
-          {skills.length > 0 ? (
-            <View style={styles.skillsContainer}>
-              {skills.slice(0, 5).map((skill, index) => (
-                <TouchableOpacity 
-                  key={index} 
-                  style={styles.skillChip}
-                  onLongPress={() => deleteItem('skill', skill)}
-                >
-                  <Text style={styles.skillText}>{skill}</Text>
-                </TouchableOpacity>
-              ))}
-              {skills.length > 5 && (
-                <TouchableOpacity style={styles.moreSkillsChip}>
-                  <Text style={styles.moreSkillsText}>+{skills.length - 5} more</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          ) : (
-            <Text style={styles.emptyText}>No skills added yet. Upload resume or add manually.</Text>
-          )}
-          
-          {skills.length > 5 && (
-            <TouchableOpacity style={styles.seeMoreButton}>
-              <Text style={styles.seeMoreText}>See all skills</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Experience Section */}
-        {(profileData?.experience_level || profileData?.experience_years) && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionTitleContainer}>
-                <Ionicons name="briefcase-outline" size={20} color="#4285F4" />
-                <Text style={styles.sectionTitle}>Experience</Text>
-              </View>
-            </View>
-            
-            <View style={styles.infoRow}>
-              <Ionicons name="trending-up" size={16} color="#666" />
-              <Text style={styles.infoText}>
-                {profileData.experience_level || 'Not specified'} 
-                {profileData.experience_years ? ` • ${profileData.experience_years} years` : ''}
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Profile Header Card */}
+        <View style={styles.profileHeaderCard}>
+          <View style={styles.avatarContainer}>
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>
+                {userName?.charAt(0)?.toUpperCase() || 'U'}
               </Text>
             </View>
           </View>
-        )}
+          <Text style={styles.profileName}>{userName || 'User'}</Text>
+          <Text style={styles.profileEmail}>{userEmail || 'email@example.com'}</Text>
+        </View>
 
-        {/* Work Experience Section */}
-        {workExperience.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionTitleContainer}>
-                <Ionicons name="briefcase-outline" size={20} color="#4285F4" />
-                <Text style={styles.sectionTitle}>Work experience</Text>
+        {/* About Me Section */}
+        <CollapsibleSection
+          title="About Me"
+          icon="account-circle-outline"
+          iconColor="#FF8C42"
+          expanded={expandedSections.about}
+          onToggle={() => toggleSection('about')}
+          isEditing={editingSection === 'about'}
+          onStartEdit={() => startEdit('about')}
+        >
+          {editingSection === 'about' ? (
+            <View style={styles.editContainer}>
+              <Text style={styles.label}>Full Name</Text>
+              <TextInput
+                style={styles.input}
+                value={editForm.full_name}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, full_name: text }))}
+                placeholder="Your full name"
+              />
+              
+              <Text style={styles.label}>Email</Text>
+              <TextInput
+                style={styles.input}
+                value={editForm.email}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, email: text }))}
+                placeholder="your.email@example.com"
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+              
+              <Text style={styles.label}>Mobile</Text>
+              <TextInput
+                style={styles.input}
+                value={editForm.mobile}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, mobile: text }))}
+                placeholder="Phone number"
+                keyboardType="phone-pad"
+              />
+              
+              <Text style={styles.label}>About</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={editForm.about}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, about: text }))}
+                placeholder="Tell us about yourself..."
+                multiline
+                numberOfLines={4}
+              />
+              
+              <View style={styles.buttonRow}>
+                <TouchableOpacity style={styles.cancelButton} onPress={cancelEdit}>
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.saveButton} 
+                  onPress={() => saveSection('about')}
+                  disabled={saving}
+                >
+                  {saving ? (
+                    <ActivityIndicator color="#FFF" size="small" />
+                  ) : (
+                    <Text style={styles.saveButtonText}>Save</Text>
+                  )}
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity onPress={() => openEditModal('work')}>
-                <Ionicons name="add" size={20} color="#4285F4" />
-              </TouchableOpacity>
             </View>
-            
-            {workExperience.map((work) => (
-              <View key={work.id} style={styles.experienceItem}>
-                <View style={styles.experienceHeader}>
-                  <Text style={styles.experienceTitle}>{work.position}</Text>
-                  <TouchableOpacity onPress={() => openEditModal('work', work)}>
-                    <Ionicons name="pencil" size={16} color="#4285F4" />
-                  </TouchableOpacity>
+          ) : (
+            <View style={styles.viewContainer}>
+              <Text style={styles.contentText}>
+                {profileData?.about || 'No bio added yet. Click + to add your professional summary.'}
+              </Text>
+              {profileData?.email && (
+                <View style={styles.infoRow}>
+                  <Ionicons name="mail" size={16} color="#666" />
+                  <Text style={styles.infoText}>{profileData.email}</Text>
                 </View>
-                <Text style={styles.experienceCompany}>{work.company}</Text>
-                <Text style={styles.experienceDuration}>{work.duration} • {work.years}</Text>
-              </View>
-            ))}
-          </View>
-        )}
+              )}
+              {profileData?.mobile && (
+                <View style={styles.infoRow}>
+                  <Ionicons name="call" size={16} color="#666" />
+                  <Text style={styles.infoText}>{profileData.mobile}</Text>
+                </View>
+              )}
+            </View>
+          )}
+        </CollapsibleSection>
 
         {/* Education Section */}
-        {education.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionTitleContainer}>
-                <Ionicons name="school-outline" size={20} color="#4285F4" />
-                <Text style={styles.sectionTitle}>Education</Text>
+        <CollapsibleSection
+          title="Education & Career"
+          icon="school-outline"
+          iconColor="#4A90E2"
+          expanded={expandedSections.education}
+          onToggle={() => toggleSection('education')}
+          isEditing={editingSection === 'education'}
+          onStartEdit={() => startEdit('education')}
+        >
+          {editingSection === 'education' ? (
+            <View style={styles.editContainer}>
+              <Text style={styles.label}>Degree</Text>
+              <TextInput
+                style={styles.input}
+                value={editForm.degree}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, degree: text }))}
+                placeholder="e.g., B.Tech, MBA"
+              />
+              
+              <Text style={styles.label}>Stream/Specialization</Text>
+              <TextInput
+                style={styles.input}
+                value={editForm.stream}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, stream: text }))}
+                placeholder="e.g., Computer Science, Marketing"
+              />
+              
+              <Text style={styles.label}>Graduation Year</Text>
+              <TextInput
+                style={styles.input}
+                value={editForm.graduation_year}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, graduation_year: text }))}
+                placeholder="e.g., 2025"
+                keyboardType="numeric"
+              />
+              
+              <Text style={styles.label}>Experience Level</Text>
+              <TextInput
+                style={styles.input}
+                value={editForm.experience}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, experience: text }))}
+                placeholder="e.g., 0-1 years, 1-3 years"
+              />
+              
+              <Text style={styles.label}>Preferred City</Text>
+              <TextInput
+                style={styles.input}
+                value={editForm.preferred_city}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, preferred_city: text }))}
+                placeholder="e.g., Coimbatore, Chennai"
+              />
+              
+              <View style={styles.buttonRow}>
+                <TouchableOpacity style={styles.cancelButton} onPress={cancelEdit}>
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.saveButton} 
+                  onPress={() => saveSection('education')}
+                  disabled={saving}
+                >
+                  {saving ? (
+                    <ActivityIndicator color="#FFF" size="small" />
+                  ) : (
+                    <Text style={styles.saveButtonText}>Save</Text>
+                  )}
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity onPress={() => openEditModal('education')}>
-                <Ionicons name="add" size={20} color="#4285F4" />
-              </TouchableOpacity>
             </View>
-            
-            {education.map((edu) => (
-              <View key={edu.id} style={styles.experienceItem}>
-                <View style={styles.experienceHeader}>
-                  <Text style={styles.experienceTitle}>{edu.degree}</Text>
-                  <TouchableOpacity onPress={() => openEditModal('education', edu)}>
-                    <Ionicons name="pencil" size={16} color="#4285F4" />
+          ) : (
+            <View style={styles.viewContainer}>
+              {profileData?.degree && (
+                <View style={styles.educationItem}>
+                  <Text style={styles.educationDegree}>{profileData.degree}</Text>
+                  {profileData.stream && (
+                    <Text style={styles.educationStream}>{profileData.stream}</Text>
+                  )}
+                  {profileData.graduation_year && (
+                    <Text style={styles.educationYear}>Graduating {profileData.graduation_year}</Text>
+                  )}
+                </View>
+              )}
+              {profileData?.experience && (
+                <View style={styles.infoRow}>
+                  <MaterialCommunityIcons name="briefcase-outline" size={16} color="#666" />
+                  <Text style={styles.infoText}>{profileData.experience} experience</Text>
+                </View>
+              )}
+              {profileData?.preferred_city && (
+                <View style={styles.infoRow}>
+                  <Ionicons name="location-outline" size={16} color="#666" />
+                  <Text style={styles.infoText}>{profileData.preferred_city}</Text>
+                </View>
+              )}
+              {!profileData?.degree && !profileData?.experience && (
+                <Text style={styles.emptyText}>No education details added. Click + to add.</Text>
+              )}
+            </View>
+          )}
+        </CollapsibleSection>
+
+        {/* Skills Section */}
+        <CollapsibleSection
+          title="Skills & Interests"
+          icon="star-outline"
+          iconColor="#10B981"
+          expanded={expandedSections.skills}
+          onToggle={() => toggleSection('skills')}
+          isEditing={editingSection === 'skills'}
+          onStartEdit={() => startEdit('skills')}
+        >
+          <View style={styles.viewContainer}>
+            {/* Skills */}
+            <View style={styles.skillCategory}>
+              <Text style={styles.skillCategoryTitle}>Technical Skills</Text>
+              {editingSection === 'skills' && (
+                <View style={styles.addSkillRow}>
+                  <TextInput
+                    style={[styles.input, styles.addSkillInput]}
+                    value={newSkillInput}
+                    onChangeText={setNewSkillInput}
+                    placeholder="Add a skill"
+                  />
+                  <TouchableOpacity 
+                    onPress={() => addSkill('skills', newSkillInput)}
+                    style={styles.addIconButton}
+                  >
+                    <Ionicons name="add-circle" size={32} color="#4A90E2" />
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.experienceCompany}>{edu.institution}</Text>
-                <Text style={styles.experienceDuration}>{edu.duration} • {edu.years}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Social Links Section */}
-        {(profileData?.linkedin || profileData?.github || profileData?.portfolio) && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionTitleContainer}>
-                <Ionicons name="link-outline" size={20} color="#4285F4" />
-                <Text style={styles.sectionTitle}>Social Links</Text>
-              </View>
-            </View>
-            
-            {profileData.linkedin && (
-              <View style={styles.infoRow}>
-                <Ionicons name="logo-linkedin" size={16} color="#0077B5" />
-                <Text style={styles.linkText}>{profileData.linkedin}</Text>
-              </View>
-            )}
-            
-            {profileData.github && (
-              <View style={styles.infoRow}>
-                <Ionicons name="logo-github" size={16} color="#333" />
-                <Text style={styles.linkText}>{profileData.github}</Text>
-              </View>
-            )}
-            
-            {profileData.portfolio && (
-              <View style={styles.infoRow}>
-                <Ionicons name="globe-outline" size={16} color="#4285F4" />
-                <Text style={styles.linkText}>{profileData.portfolio}</Text>
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* Languages Section */}
-        {languages.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionTitleContainer}>
-                <Ionicons name="language-outline" size={20} color="#4285F4" />
-                <Text style={styles.sectionTitle}>Language</Text>
-              </View>
-              <TouchableOpacity onPress={() => openEditModal('language')}>
-                <Ionicons name="pencil" size={16} color="#4285F4" />
-              </TouchableOpacity>
-            </View>
-            
-            <View style={styles.skillsContainer}>
-              {languages.map((language, index) => (
-                <TouchableOpacity 
-                  key={index} 
-                  style={styles.skillChip}
-                  onLongPress={() => deleteItem('language', language)}
-                >
-                  <Text style={styles.skillText}>{language}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* Resume Section */}
-        {resumes.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionTitleContainer}>
-                <Ionicons name="document-text-outline" size={20} color="#4285F4" />
-                <Text style={styles.sectionTitle}>Resume</Text>
-              </View>
-              <TouchableOpacity onPress={handleUploadResume}>
-                <Ionicons name="add" size={20} color="#4285F4" />
-              </TouchableOpacity>
-            </View>
-            
-            {resumes.map((resume) => (
-              <View key={resume.id} style={styles.resumeItem}>
-                <View style={styles.resumeIcon}>
-                  <Text style={styles.resumeIconText}>📄</Text>
+              )}
+              {profileData?.skills && profileData.skills.length > 0 ? (
+                <View style={styles.skillsContainer}>
+                  {profileData.skills.map((skill: string, index: number) => (
+                    <View key={index} style={styles.skillChip}>
+                      <Text style={styles.skillText}>{skill}</Text>
+                      {editingSection === 'skills' && (
+                        <TouchableOpacity 
+                          onPress={() => removeSkill('skills', skill)}
+                          style={styles.removeButton}
+                        >
+                          <Ionicons name="close-circle" size={18} color="#666" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ))}
                 </View>
-                <View style={styles.resumeInfo}>
-                  <Text style={styles.resumeTitle}>{resume.name}</Text>
-                  <Text style={styles.resumeDetails}>{resume.size} • {resume.uploadDate}</Text>
+              ) : (
+                <Text style={styles.emptyText}>No skills added yet</Text>
+              )}
+            </View>
+
+            {/* Interests */}
+            <View style={styles.skillCategory}>
+              <Text style={styles.skillCategoryTitle}>Interests</Text>
+              {editingSection === 'skills' && (
+                <View style={styles.addSkillRow}>
+                  <TextInput
+                    style={[styles.input, styles.addSkillInput]}
+                    value={newInterestInput}
+                    onChangeText={setNewInterestInput}
+                    placeholder="Add an interest"
+                  />
+                  <TouchableOpacity 
+                    onPress={() => addSkill('interests', newInterestInput)}
+                    style={styles.addIconButton}
+                  >
+                    <Ionicons name="add-circle" size={32} color="#10B981" />
+                  </TouchableOpacity>
                 </View>
-                <TouchableOpacity style={styles.deleteButton}>
-                  <Ionicons name="trash-outline" size={20} color="#FF6B6B" />
-                </TouchableOpacity>
-              </View>
-            ))}
+              )}
+              {profileData?.interests && profileData.interests.length > 0 ? (
+                <View style={styles.skillsContainer}>
+                  {profileData.interests.map((interest: string, index: number) => (
+                    <View key={index} style={[styles.skillChip, styles.interestChip]}>
+                      <Text style={styles.skillText}>{interest}</Text>
+                      {editingSection === 'skills' && (
+                        <TouchableOpacity 
+                          onPress={() => removeSkill('interests', interest)}
+                          style={styles.removeButton}
+                        >
+                          <Ionicons name="close-circle" size={18} color="#666" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.emptyText}>No interests added yet</Text>
+              )}
+            </View>
+
+            {/* Technical Domains */}
+            <View style={styles.skillCategory}>
+              <Text style={styles.skillCategoryTitle}>Technical Domains</Text>
+              {editingSection === 'skills' && (
+                <View style={styles.addSkillRow}>
+                  <TextInput
+                    style={[styles.input, styles.addSkillInput]}
+                    value={newDomainInput}
+                    onChangeText={setNewDomainInput}
+                    placeholder="Add a domain"
+                  />
+                  <TouchableOpacity 
+                    onPress={() => addSkill('technical_domains', newDomainInput)}
+                    style={styles.addIconButton}
+                  >
+                    <Ionicons name="add-circle" size={32} color="#FF8C42" />
+                  </TouchableOpacity>
+                </View>
+              )}
+              {profileData?.technical_domains && profileData.technical_domains.length > 0 ? (
+                <View style={styles.skillsContainer}>
+                  {profileData.technical_domains.map((domain: string, index: number) => (
+                    <View key={index} style={[styles.skillChip, styles.domainChip]}>
+                      <Text style={styles.skillText}>{domain}</Text>
+                      {editingSection === 'skills' && (
+                        <TouchableOpacity 
+                          onPress={() => removeSkill('technical_domains', domain)}
+                          style={styles.removeButton}
+                        >
+                          <Ionicons name="close-circle" size={18} color="#666" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.emptyText}>No domains added yet</Text>
+              )}
+            </View>
+
+            {editingSection === 'skills' && (
+              <TouchableOpacity 
+                style={[styles.saveButton, { width: '100%', marginTop: 16 }]} 
+                onPress={() => setEditingSection(null)}
+              >
+                <Text style={styles.saveButtonText}>Done</Text>
+              </TouchableOpacity>
+            )}
           </View>
-        )}
+        </CollapsibleSection>
 
-        {/* Sign Out Button */}
-        <TouchableOpacity 
-          style={styles.signOutButton}
-          onPress={() => {
-            Alert.alert(
-              'Sign Out',
-              'Are you sure you want to sign out?',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                { 
-                  text: 'Sign Out', 
-                  style: 'destructive',
-                  onPress: async () => {
-                    await signOut();
-                    router.replace('/(auth)/signin');
-                  }
-                }
-              ]
-            );
-          }}
-        >
-          <Ionicons name="log-out-outline" size={20} color="#FF6B6B" style={{ marginRight: 8 }} />
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </TouchableOpacity>
-
-        <View style={styles.bottomPadding} />
+        <View style={{ height: 40 }} />
       </ScrollView>
-
-      {/* Modal for adding/editing items */}
-      <Modal
-        visible={showModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setShowModal(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setShowModal(false)}>
-              <Text style={styles.modalCancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <Text style={styles.modalTitle}>
-              {editingItem ? 'Edit' : 'Add'} {modalType === 'work' ? 'Work Experience' : 
-               modalType === 'education' ? 'Education' : 
-               modalType === 'skill' ? 'Skill' : 'Language'}
-            </Text>
-            <TouchableOpacity onPress={handleSaveItem}>
-              <Text style={styles.modalSaveText}>Save</Text>
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.modalContent}>
-            {modalType === 'work' && (
-              <>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Position"
-                  value={formData.position}
-                  onChangeText={(text) => setFormData({...formData, position: text})}
-                />
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Company"
-                  value={formData.company}
-                  onChangeText={(text) => setFormData({...formData, company: text})}
-                />
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Duration (e.g., Jan 2015 - Feb 2022)"
-                  value={formData.duration}
-                  onChangeText={(text) => setFormData({...formData, duration: text})}
-                />
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Years (e.g., 5 Years)"
-                  value={formData.years}
-                  onChangeText={(text) => setFormData({...formData, years: text})}
-                />
-              </>
-            )}
-            
-            {modalType === 'education' && (
-              <>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Degree"
-                  value={formData.degree}
-                  onChangeText={(text) => setFormData({...formData, degree: text})}
-                />
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Institution"
-                  value={formData.institution}
-                  onChangeText={(text) => setFormData({...formData, institution: text})}
-                />
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Duration (e.g., Sep 2010 - Aug 2013)"
-                  value={formData.duration}
-                  onChangeText={(text) => setFormData({...formData, duration: text})}
-                />
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Years (e.g., 3 Years)"
-                  value={formData.years}
-                  onChangeText={(text) => setFormData({...formData, years: text})}
-                />
-              </>
-            )}
-            
-            {modalType === 'skill' && (
-              <TextInput
-                style={styles.modalInput}
-                placeholder="Skill (e.g., JavaScript, Python, React)"
-                value={formData.skill}
-                onChangeText={(text) => setFormData({...formData, skill: text})}
-              />
-            )}
-            
-            {modalType === 'language' && (
-              <TextInput
-                style={styles.modalInput}
-                placeholder="Language (e.g., English, Spanish)"
-                value={formData.language}
-                onChangeText={(text) => setFormData({...formData, language: text})}
-              />
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      {/* Floating Save Button */}
-      <TouchableOpacity style={styles.floatingButton} onPress={saveProfile}>
-        <Ionicons name="checkmark" size={24} color="#FFF" />
-      </TouchableOpacity>
     </View>
   );
 }
 
+interface CollapsibleSectionProps {
+  title: string;
+  icon: string;
+  iconColor: string;
+  expanded: boolean;
+  onToggle: () => void;
+  isEditing: boolean;
+  onStartEdit: () => void;
+  children: React.ReactNode;
+}
+
+const CollapsibleSection = ({
+  title,
+  icon,
+  iconColor,
+  expanded,
+  onToggle,
+  isEditing,
+  onStartEdit,
+  children,
+}: CollapsibleSectionProps) => (
+  <View style={styles.sectionCard}>
+    <TouchableOpacity 
+      style={styles.sectionHeader} 
+      onPress={onToggle}
+      activeOpacity={0.7}
+    >
+      <View style={styles.sectionTitleContainer}>
+        <View style={[styles.iconCircle, { backgroundColor: `${iconColor}20` }]}>
+          <MaterialCommunityIcons name={icon as any} size={24} color={iconColor} />
+        </View>
+        <Text style={styles.sectionTitle}>{title}</Text>
+      </View>
+      <View style={styles.sectionActions}>
+        <TouchableOpacity 
+          style={styles.addButton}
+          onPress={(e) => {
+            e.stopPropagation();
+            onStartEdit();
+          }}
+        >
+          <Ionicons 
+            name={isEditing ? "close" : "add"} 
+            size={24} 
+            color={isEditing ? "#EF4444" : iconColor} 
+          />
+        </TouchableOpacity>
+        <Ionicons 
+          name={expanded ? "chevron-up" : "chevron-down"} 
+          size={24} 
+          color="#999" 
+        />
+      </View>
+    </TouchableOpacity>
+    
+    {expanded && (
+      <View style={styles.sectionContent}>
+        {children}
+      </View>
+    )}
+  </View>
+);
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F8F9FA',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F8F9FA',
   },
   loadingText: {
+    marginTop: 12,
     fontSize: 16,
     color: '#666',
   },
-  scrollContainer: {
-    flex: 1,
-  },
-  
-  // Profile Section Wrapper
-  profileSectionWrapper: {
-    position: 'relative',
-    height: 320,
-    overflow: 'hidden',
-  },
-  
-  // Profile Card Background
-  profileCardBackground: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    width: '100%',
-    height: '100%',
-  },
-  
-  // Header Styles - Absolutely positioned on top
   header: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
+    backgroundColor: '#4A90E2',
     paddingTop: 50,
     paddingBottom: 20,
-    zIndex: 10,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+  },
+  headerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
   },
   backButton: {
     padding: 8,
   },
-  settingsButton: {
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#FFF',
+    flex: 1,
+    textAlign: 'center',
+  },
+  signOutButton: {
     padding: 8,
   },
-  
-  // Profile Section Styles - Absolutely positioned on top
-  profileSection: {
-    position: 'absolute',
-    top: 90,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    paddingBottom: 30,
-    zIndex: 5,
+  content: {
+    flex: 1,
+    paddingHorizontal: 16,
   },
-  profileImageContainer: {
-    marginBottom: 15,
-  },
-  profileImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+  profileHeaderCard: {
     backgroundColor: '#FFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  profileImageText: {
-    fontSize: 40,
-    fontWeight: 'bold',
-    color: '#4285F4',
-  },
-  profileName: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFF',
-    marginBottom: 5,
-  },
-  profileLocation: {
-    fontSize: 16,
-    color: '#FFF',
-    opacity: 0.8,
-    marginBottom: 20,
-  },
-  editProfileButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 20,
-    paddingVertical: 8,
     borderRadius: 20,
-  },
-  editProfileText: {
-    color: '#FFF',
-    marginRight: 8,
-    fontSize: 16,
-  },
-  
-  // Section Styles
-  section: {
-    backgroundColor: '#FFF',
-    marginHorizontal: 20,
-    marginTop: 20,
-    borderRadius: 12,
-    padding: 20,
+    padding: 24,
+    marginTop: -20,
+    marginBottom: 16,
+    alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowRadius: 8,
     elevation: 3,
+  },
+  avatarContainer: {
+    marginBottom: 12,
+  },
+  avatar: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#4A90E2',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarText: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#FFF',
+  },
+  profileName: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    marginBottom: 4,
+  },
+  profileEmail: {
+    fontSize: 15,
+    color: '#666',
+  },
+  sectionCard: {
+    backgroundColor: '#FFF',
+    borderRadius: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   sectionHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 15,
+    justifyContent: 'space-between',
+    padding: 16,
   },
   sectionTitleContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
+  },
+  iconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#000',
-    marginLeft: 8,
+    color: '#1A1A1A',
   },
-  
-  // Upload Button
-  uploadButton: {
-    borderWidth: 2,
-    borderColor: '#4285F4',
-    borderStyle: 'dashed',
-    borderRadius: 12,
-    padding: 30,
+  sectionActions: {
+    flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FBFF',
+    gap: 8,
   },
-  uploadButtonText: {
+  addButton: {
+    padding: 4,
+  },
+  sectionContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  editContainer: {
+    paddingTop: 8,
+  },
+  viewContainer: {
+    paddingTop: 8,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    marginBottom: 8,
+    marginTop: 12,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 15,
+    backgroundColor: '#FFF',
+    marginBottom: 12,
+  },
+  textArea: {
+    height: 100,
+    textAlignVertical: 'top',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    backgroundColor: '#F0F0F0',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#4285F4',
-    marginTop: 10,
-  },
-  uploadButtonSubtext: {
-    fontSize: 14,
     color: '#666',
-    marginTop: 5,
-    textAlign: 'center',
   },
-  
-  // Info Row
+  saveButton: {
+    flex: 1,
+    backgroundColor: '#4A90E2',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  saveButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFF',
+  },
+  contentText: {
+    fontSize: 15,
+    color: '#666',
+    lineHeight: 22,
+    marginBottom: 12,
+  },
   infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  infoText: {
+    fontSize: 15,
+    color: '#666',
+  },
+  educationItem: {
+    marginBottom: 16,
+  },
+  educationDegree: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    marginBottom: 4,
+  },
+  educationStream: {
+    fontSize: 15,
+    color: '#666',
+    marginBottom: 2,
+  },
+  educationYear: {
+    fontSize: 14,
+    color: '#999',
+  },
+  skillCategory: {
+    marginBottom: 20,
+  },
+  skillCategoryTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    marginBottom: 12,
+  },
+  addSkillRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 12,
   },
-  infoText: {
-    fontSize: 16,
-    color: '#333',
-    marginLeft: 12,
+  addSkillInput: {
     flex: 1,
+    marginBottom: 0,
   },
-  linkText: {
+  addIconButton: {
+    marginLeft: 8,
+  },
+  skillsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  skillChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E3F2FD',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 6,
+  },
+  interestChip: {
+    backgroundColor: '#D1FAE5',
+  },
+  domainChip: {
+    backgroundColor: '#FFF7ED',
+  },
+  skillText: {
     fontSize: 14,
-    color: '#4285F4',
-    marginLeft: 12,
-    flex: 1,
+    color: '#2D3748',
+    fontWeight: '500',
+  },
+  removeButton: {
+    padding: 2,
   },
   emptyText: {
     fontSize: 14,
     color: '#999',
     fontStyle: 'italic',
-  },
-  
-  // About Section
-  aboutText: {
-    fontSize: 16,
-    color: '#666',
-    lineHeight: 24,
-  },
-  textArea: {
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    minHeight: 100,
-    textAlignVertical: 'top',
-  },
-  saveButton: {
-    backgroundColor: '#4285F4',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  saveButtonText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  
-  // Experience Item Styles
-  experienceItem: {
-    marginBottom: 15,
-    paddingBottom: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  experienceHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 5,
-  },
-  experienceTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000',
-    flex: 1,
-  },
-  experienceCompany: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 3,
-  },
-  experienceDuration: {
-    fontSize: 12,
-    color: '#999',
-  },
-  
-  // Skills Styles
-  skillsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 10,
-  },
-  skillChip: {
-    backgroundColor: '#F5F5F5',
-    borderRadius: 20,
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    marginRight: 10,
-    marginBottom: 10,
-  },
-  skillText: {
-    fontSize: 14,
-    color: '#333',
-  },
-  moreSkillsChip: {
-    backgroundColor: '#E3F2FD',
-    borderRadius: 20,
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    marginRight: 10,
-    marginBottom: 10,
-  },
-  moreSkillsText: {
-    fontSize: 14,
-    color: '#4285F4',
-    fontWeight: '600',
-  },
-  seeMoreButton: {
-    alignSelf: 'center',
-    marginTop: 10,
-  },
-  seeMoreText: {
-    fontSize: 14,
-    color: '#4285F4',
-    fontWeight: '600',
-  },
-  
-  // Resume Styles
-  resumeItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-  },
-  resumeIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-    backgroundColor: '#FFE5E5',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 15,
-  },
-  resumeIconText: {
-    fontSize: 20,
-  },
-  resumeInfo: {
-    flex: 1,
-  },
-  resumeTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 3,
-  },
-  resumeDetails: {
-    fontSize: 12,
-    color: '#666',
-  },
-  deleteButton: {
-    padding: 8,
-  },
-  
-  // Sign Out Button
-  signOutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFF',
-    marginHorizontal: 20,
-    marginTop: 20,
-    marginBottom: 10,
-    paddingVertical: 15,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#FF6B6B',
-  },
-  signOutText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FF6B6B',
-  },
-  
-  // Modal Styles
-  modalContainer: {
-    flex: 1,
-    backgroundColor: '#FFF',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-    paddingTop: 50,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#000',
-  },
-  modalCancelText: {
-    fontSize: 16,
-    color: '#666',
-  },
-  modalSaveText: {
-    fontSize: 16,
-    color: '#4285F4',
-    fontWeight: '600',
-  },
-  modalContent: {
-    padding: 20,
-  },
-  modalInput: {
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    marginBottom: 15,
-  },
-  
-  // Floating Button
-  floatingButton: {
-    position: 'absolute',
-    bottom: 30,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#4285F4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  
-  bottomPadding: {
-    height: 100,
   },
 });

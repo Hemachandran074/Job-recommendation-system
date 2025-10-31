@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -13,6 +13,29 @@ export default function EducationDetails() {
   const [graduationYear, setGraduationYear] = useState('');
   const [cgpa, setCgpa] = useState('');
   const [location, setLocation] = useState('');
+
+  // Load saved data when component mounts
+  useEffect(() => {
+    const loadEducationData = async () => {
+      try {
+        const savedData = await AsyncStorage.getItem('education');
+        if (savedData) {
+          const data = JSON.parse(savedData);
+          setDegree(data.degree || '');
+          setStream(data.stream || '');
+          setInstitute(data.institute || '');
+          setGraduationYear(data.graduation_year || '');
+          setCgpa(data.cgpa || '');
+          setLocation(data.location || '');
+          console.log('✅ Loaded education data:', data);
+        }
+      } catch (error) {
+        console.error('Error loading education data:', error);
+      }
+    };
+    
+    loadEducationData();
+  }, []);
 
   const handleNext = async () => {
     if (!degree || !stream || !institute || !graduationYear || !cgpa || !location) {
