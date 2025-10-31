@@ -51,6 +51,19 @@ export default function SignUp() {
       
       console.log('📦 Signup response:', response);
       
+      // If backend returned that email confirmation is required, send user to check-email
+      if (response.email_confirmation_required) {
+        console.log('⚠️ Email confirmation required for:', response.user?.email);
+        // Save userId and email, then navigate to check-email screen
+        if (response.user?.id) {
+          await AsyncStorage.setItem('userId', response.user.id);
+        }
+        await AsyncStorage.setItem('userEmail', email.trim().toLowerCase());
+        setLoading(false);
+        router.push({ pathname: '/(auth)/check-email', params: { email: email.trim().toLowerCase() } });
+        return;
+      }
+
       if (response.access_token && response.user) {
         console.log('✅ Signup successful! Saving user data...');
         

@@ -76,6 +76,7 @@ export interface AuthResponse {
     email: string;
     name: string;
   };
+  email_confirmation_required?: boolean;
   message?: string;
 }
 

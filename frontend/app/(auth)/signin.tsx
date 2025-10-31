@@ -45,12 +45,19 @@ export default function SignIn() {
 
       console.log('💾 Saving auth data...');
 
-      // Save auth data to AsyncStorage
+      // Save into ProfileContext and AsyncStorage
+      await signIn({
+        id: response.user.id,
+        name: response.user.name || '',
+        email: response.user.email,
+        mobile: ''
+      }, response.access_token);
+
+      // Also save convenience keys used elsewhere
       await AsyncStorage.multiSet([
-        ['authToken', response.access_token],
         ['userId', response.user.id],
         ['userEmail', response.user.email],
-        ['userName', response.user.name],
+        ['userName', response.user.name || ''],
       ]);
 
       console.log('✅ Auth data saved');
