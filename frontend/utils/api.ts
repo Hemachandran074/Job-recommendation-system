@@ -4,27 +4,29 @@ import { Platform } from 'react-native';
 // 🔧 SMART BACKEND URL DETECTION
 // Automatically detects platform and uses correct URL
 const getBackendURL = () => {
-  // For web browser (Expo Web / localhost:8081)
+  // For web browser (Expo Web)
   if (Platform.OS === 'web') {
-    return 'http://localhost:3000';
+    return 'http://localhost:4000';
   }
-  
+
   // For Android device/emulator (Expo Go on phone/emulator)
   if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:3000'; // Android emulator localhost -> host machine
+    // Android emulator maps 10.0.2.2 -> host machine
+  return 'http://10.0.2.2:4000';
   }
-  
+
   // For iOS Simulator
   if (Platform.OS === 'ios') {
-    return 'http://localhost:3000';
+  return 'http://localhost:4000';
   }
-  
+
   // Default fallback
-  return 'http://localhost:8000';
+  return 'http://localhost:4000';
 };
 
 const BACKEND_URL = getBackendURL();
-const API_URL = BACKEND_URL  // Backend routes don't use /api/v1 prefix;
+// Use the backend API prefix so frontend calls map to routes implemented in backend
+const API_URL = `${BACKEND_URL}/api/v1`;
 
 console.log('🌍 Platform:', Platform.OS);
 console.log('🌍 Backend URL:', BACKEND_URL);
@@ -78,20 +80,19 @@ export interface AuthResponse {
 }
 
 export const authAPI = {
-  // POST /api/v1/users/register
+  // POST /api/v1/auth/signup
   signup: async (data: SignUpData): Promise<AuthResponse> => {
     console.log('📤 Signup request:', { ...data, password: '***' });
     // backend expects full_name instead of name
-    const payload = { full_name: data.name, email: data.email, password: data.password }
-    const response = await api.post('/auth/register', payload);
+    const payload = { full_name: data.name, email: data.email, password: data.password };
+    const response = await api.post('/auth/signup', payload);
     console.log('📦 Signup response:', response.data);
     return response.data;
   },
-  
-  // POST /api/v1/users/login
+
+  // POST /api/v1/auth/login
   signin: async (data: SignInData): Promise<AuthResponse> => {
     console.log('📤 Signin request:', { email: data.email, password: '***' });
-    // send JSON { email, password } to match backend /auth/login
     const response = await api.post('/auth/login', { email: data.email, password: data.password });
     console.log('📦 Signin response:', response.data);
     return response.data;
@@ -103,15 +104,16 @@ export const authAPI = {
 // ============================================
 
 export const userAPI = {
+
   // GET /api/v1/users/{user_id}
   getProfile: async (userId: string) => {
-    const response = await api.get('/profile')  // Backend uses /profile without user ID;
+    const response = await api.get(`/users/${userId}`);
     return response.data;
   },
 
-  // PUT /api/v1/users/{user_id}
+  // PATCH /api/v1/users/{user_id}
   updateProfile: async (userId: string, data: any) => {
-    const response = await api.put('/profile', data)  // Backend uses /profile without user ID;
+    const response = await api.patch(`/users/${userId}`, data);
     return response.data;
   },
 
@@ -180,7 +182,7 @@ export const jobsAPI = {
 
   // GET /api/v1/jobs/fetch-live/:specialization - Fetch live jobs from RapidAPI
   fetchLiveJobs: async (specialization: string, limit: number = 30) => {
-    const response = await api.get(`/jobs/fetch-live/${specialization}`, {
+    const response = await api.get(`/jobs/specialization/${specialization}`, {
       params: { limit },
       timeout: 30000, // 30 seconds for external API call
     });
@@ -216,6 +218,12 @@ export const jobsAPI = {
     const response = await api.delete(`/jobs/${jobId}`);
     return response.data;
   },
+  
+  // GET /api/v1/jobs/suggested/:userId
+  getSuggested: async (userId: string) => {
+    const response = await api.get(`/jobs/suggested/${userId}`);
+    return response.data;
+  }
 };
 
 // ============================================
@@ -266,7 +274,7 @@ export const recentJobsAPI = {
     const params: any = { limit, skip: 0 };
     if (jobType) params.job_type = jobType;
     
-    const response = await api.get('/jobs', { params });
+  const response = await api.get('/jobs/recent', { params });
     const jobs = response.data;
     
     // Filter to only last 7 days
