@@ -1,0 +1,887 @@
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Image } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useState, useEffect } from 'react';
+import { Ionicons, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
+import { useProfile } from '../contexts/ProfileContext';
+import { jobsAPI, recommendationsAPI, recentJobsAPI, rapidapiAPI } from '../utils/api';
+import { Internship } from '../types';
+import React from 'react';
+import JobCard from '../components/ui/JobCard';
+
+// Import category images
+import CompanyIcon from '../assets/images/categories/company-icon.png';
+import FullTimeIcon from '../assets/images/categories/fulltime-icon.png';
+import PartTimeIcon from '../assets/images/categories/parttime-icon.png';
+import InternshipIcon from '../assets/images/categories/internship-icon.png';
+
+export default function Dashboard() {
+  const router = useRouter();
+  const { profile, signOut } = useProfile();
+  const [recommended, setRecommended] = useState<Internship[]>([]);
+  const [recent, setRecent] = useState<Internship[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('home');
+  const [lastFetchTime, setLastFetchTime] = useState<Date | null>(null);
+
+  useEffect(() => {
+    loadData();
+    
+    // Set up auto-refresh every 30 minutes (1800000 ms)
+    const interval = setInterval(() => {
+      console.log('🔄 Auto-refreshing dashboard jobs (30-minute interval)...');
+      loadData();
+    }, 1800000); // 30 minutes
+    
+    // Cleanup interval on unmount
+    return () => {
+      clearInterval(interval);
+    };
+  }, [profile]);
+
+  const handleSignOut = async () => {
+    await signOut();
+    router.replace('/');
+  };
+
+  const handleJobClick = async (job: Internship) => {
+    try {
+      console.log('💾 Storing job on click:', job.title);
+      
+      // Store job in database (or get existing if already stored)
+      const response = await jobsAPI.storeJob(job);
+      const storedJob = response.job;
+      
+      console.log(`✅ Job stored/retrieved (ID: ${storedJob.id})`);
+      
+      // Navigate to job details using the stored job ID
+      router.push(`/job-details?id=${storedJob.id}`);
+    } catch (error) {
+      console.error('❌ Error storing job:', error);
+      // Still navigate even if storage fails (fallback)
+      router.push(`/job-details?id=${job._id || job.id}`);
+    }
+  };
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      
+      // Get user ID for personalized recommendations
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      const userId = await AsyncStorage.getItem('userId');
+
+      console.log('📊 Dashboard loading dynamic jobs for user:', userId);
+      console.log('👤 User Profile:', profile);
+
+      let recommendedJobs: Internship[] = [];
+      let recentJobs: Internship[] = [];
+
+      // DYNAMIC JOB FETCHING based on user profile
+      if (userId && profile) {
+        try {
+          console.log('🚀 Fetching dynamic jobs from RapidAPI based on user profile...');
+          
+          // Build search queries from user skills and technical domains
+          // Ensure we have arrays, even if profile data is missing or malformed
+          const userSkills = Array.isArray(profile.skills) ? profile.skills : [];
+          const technicalDomains = Array.isArray(profile.technical_domains) ? profile.technical_domains : [];
+          const preferredLocation = profile.preferred_city || profile.location || 'India';
+          
+          console.log('🔍 Debug - User skills:', userSkills);
+          console.log('🔍 Debug - Technical domains:', technicalDomains);
+          
+          // Combine skills and domains for comprehensive search
+          const combinedTerms = [...userSkills, ...technicalDomains];
+          const searchTerms = [...new Set(combinedTerms)].filter(term => term && term.trim()).slice(0, 5); // Top 5 unique terms
+          
+          console.log(`🎯 Search terms: ${searchTerms.length > 0 ? searchTerms.join(', ') : 'No search terms available'}`);
+          console.log(`📍 Preferred location: ${preferredLocation}`);
+          
+          // If no search terms, use default terms
+          if (searchTerms.length === 0) {
+            searchTerms.push('software engineer', 'developer');
+            console.log('⚠️ No skills in profile, using default search terms:', searchTerms.join(', '));
+          }
+
+          // Fetch jobs for each search term in parallel
+          const jobPromises = searchTerms.map(async (term) => {
+            try {
+              const result = await rapidapiAPI.searchJobsDynamic({
+                title_filter: term,
+                location_filter: preferredLocation,
+                limit: 10,
+                offset: 0,
+              });
+              return result.jobs || [];
+            } catch (error) {
+              console.error(`❌ Failed to fetch jobs for ${term}:`, error);
+              return [];
+            }
+          });
+
+          const jobResults = await Promise.all(jobPromises);
+          const allJobs = jobResults.flat();
+
+          // Transform and deduplicate jobs
+          const seenJobs = new Set<string>();
+          recommendedJobs = allJobs
+            .filter((job: any) => {
+              const key = `${job.title}_${job.company}`.toLowerCase();
+              if (seenJobs.has(key)) return false;
+              seenJobs.add(key);
+              return true;
+            })
+            .map((job: any) => ({
+              _id: `dynamic_${Date.now()}_${Math.random()}`,
+              id: `dynamic_${Date.now()}_${Math.random()}`,
+              title: job.title,
+              company_name: job.company,
+              location: job.location,
+              description: job.description,
+              skills_required: job.skills || [],
+              type: 'Full Time',
+              salary: 'Competitive',
+              company_logo: '',
+              organization_logo: '',
+              experience_level: 'Entry Level',
+              url: job.url || '',
+              created_at: new Date().toISOString(),
+            }))
+            .slice(0, 10); // Top 10 most relevant
+
+          console.log(`✅ Fetched ${recommendedJobs.length} dynamic jobs from RapidAPI`);
+          setLastFetchTime(new Date());
+
+          // Fallback to database recommendations if no dynamic jobs found
+          if (recommendedJobs.length === 0) {
+            console.log('⚠️ No dynamic jobs found, falling back to database recommendations...');
+            const recommendedData = await recommendationsAPI.getForUser(userId);
+            if (recommendedData.recommendations && recommendedData.recommendations.length > 0) {
+              const jobs = recommendedData.recommendations.map((rec: any) => rec.job);
+              recommendedJobs = jobs.slice(0, 10);
+              console.log(`📌 Loaded ${recommendedJobs.length} jobs from database`);
+            }
+          }
+        } catch (dynamicError: any) {
+          console.error('❌ Dynamic job fetching failed:', dynamicError);
+          console.log('⚠️ Falling back to database recommendations...');
+          
+          // Fallback to database recommendations
+          try {
+            const recommendedData = await recommendationsAPI.getForUser(userId);
+            if (recommendedData.recommendations && recommendedData.recommendations.length > 0) {
+              const jobs = recommendedData.recommendations.map((rec: any) => rec.job);
+              recommendedJobs = jobs.slice(0, 10);
+              console.log(`📌 Loaded ${recommendedJobs.length} jobs from database (fallback)`);
+            }
+          } catch (fallbackError) {
+            console.error('❌ Fallback recommendations also failed:', fallbackError);
+          }
+        }
+      } else if (userId) {
+        console.log('⚠️ User profile not complete. Loading generic recommendations...');
+        try {
+          const recommendedData = await recommendationsAPI.getForUser(userId);
+          if (recommendedData.recommendations && recommendedData.recommendations.length > 0) {
+            const jobs = recommendedData.recommendations.map((rec: any) => rec.job);
+            recommendedJobs = jobs.slice(0, 10);
+          }
+        } catch (error) {
+          console.error('❌ Could not load recommendations:', error);
+        }
+      }
+
+      // Load recent jobs from database (for "Recent Jobs" section)
+      try {
+        console.log('🔍 Fetching recent jobs from database...');
+        const recentData = await jobsAPI.getAllJobs({ limit: 30, skip: 0 });
+        console.log('✅ Recent jobs:', recentData.length, 'jobs found');
+        
+        // Filter to get jobs from last 7 days
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        
+        const recentFiltered = recentData.filter((job: any) => {
+          if (!job.created_at) return true;
+          const jobDate = new Date(job.created_at);
+          return jobDate >= sevenDaysAgo;
+        });
+
+        // Remove duplicates - exclude jobs that are in recommended list
+        const recommendedIds = new Set(recommendedJobs.map(job => job._id || job.id));
+        const uniqueRecent = recentFiltered.filter((job: any) => 
+          !recommendedIds.has(job._id || job.id)
+        );
+
+        recentJobs = uniqueRecent.slice(0, 10);
+        console.log(`📌 Filtered to ${recentJobs.length} unique recent jobs`);
+      } catch (recentError: any) {
+        console.error('❌ Could not load recent jobs:', recentError);
+      }
+
+      // Update state - replace with new jobs (don't append)
+      setRecommended(recommendedJobs);
+      setRecent(recentJobs);
+      
+    } catch (error) {
+      console.error('❌ Dashboard load error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const categories = [
+    { 
+      name: 'Company', 
+      image: CompanyIcon,
+      placeholder: '🏢' // Fallback emoji if image fails to load
+    },
+    { 
+      name: 'Full Time', 
+      image: FullTimeIcon,
+      placeholder: '💼' // Fallback emoji if image fails to load
+    },
+    { 
+      name: 'Part Time', 
+      image: PartTimeIcon,
+      placeholder: '⏰' // Fallback emoji if image fails to load
+    },
+    { 
+      name: 'Internship', 
+      image: InternshipIcon,
+      placeholder: '🎓' // Fallback emoji if image fails to load
+    }
+  ];
+
+  const getCompanyLogo = (companyName: string) => {
+    const logos: { [key: string]: string } = {
+      'Google': '🔴',
+      'Amazon': '🟠', 
+      'Microsoft': '🔵',
+      'Adobe': '🔴',
+      'TCS': '⚪',
+      'Infosys': '🔵',
+      'Wipro': '🟣',
+      'Accenture': '🟣',
+      'Flipkart': '🟡',
+      'Zomato': '🔴'
+    };
+    return logos[companyName] || '🏢';
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#3B9EFF" />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <ScrollView style={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+        {/* Header */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.welcomeText}>Welcome Back</Text>
+            <Text style={styles.userName}>Hello! {profile?.name} 👋</Text>
+          </View>
+          <View style={styles.headerButtons}>
+            <TouchableOpacity 
+              style={styles.refreshButton} 
+              onPress={() => {
+                console.log('🔄 Manual refresh triggered');
+                loadData();
+              }}
+            >
+              <Ionicons name="refresh" size={20} color="#3B9EFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
+              <Ionicons name="log-out-outline" size={20} color="#FF4444" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.notificationButton}>
+              <Ionicons name="notifications-outline" size={24} color="#000" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Last Update Indicator */}
+        {lastFetchTime && (
+          <View style={styles.lastUpdateContainer}>
+            <Ionicons name="time-outline" size={14} color="#666" />
+            <Text style={styles.lastUpdateText}>
+              Last updated: {lastFetchTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </Text>
+          </View>
+        )}
+
+        {/* Search Bar */}
+        <TouchableOpacity 
+          style={styles.searchContainer}
+          onPress={() => router.push('/specializations')}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="search" size={20} color="#999" style={styles.searchIcon} />
+          <Text style={styles.searchPlaceholder}>Search</Text>
+        </TouchableOpacity>
+
+        {/* Job Card - Replacing Promotional Banner */}
+        <JobCard />
+
+        {/* Browse by Category */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Browse By Category</Text>
+          <View style={styles.categoriesGrid}>
+            {categories.map((category, index) => (
+              <TouchableOpacity 
+                key={index} 
+                style={[styles.categoryItem]}
+                onPress={() => router.push({
+                  pathname: '/job-search',
+                  params: { category: category.name }
+                })}
+                activeOpacity={0.7}
+              >
+                {category.image ? (
+                  <Image 
+                    source={category.image} 
+                    style={styles.categoryIcon}
+                    resizeMode="center"
+                    onError={() => console.log(`Failed to load image for ${category.name}`)}
+                  />
+                ) : (
+                  <Text style={styles.categoryPlaceholder}>{category.placeholder}</Text>
+                )}
+                <Text style={styles.categoryText}>{category.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Suggested Jobs */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Suggested Jobs</Text>
+            <TouchableOpacity>
+              <Text style={styles.seeAllText}>See All</Text>
+            </TouchableOpacity>
+          </View>
+          {recommended.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.jobsHorizontal}>
+              {recommended.map((job, index) => (
+                <TouchableOpacity
+                  key={job._id || `job-${index}`}
+                  style={styles.suggestedJobCard}
+                  onPress={() => handleJobClick(job)}
+                >
+                  <View style={styles.jobCardHeader}>
+                    <View style={styles.companyLogoContainer}>
+                      {job.organization_logo || job.company_logo ? (
+                        <Image 
+                          source={{ uri: job.organization_logo || job.company_logo }} 
+                          style={styles.companyLogoImage}
+                          onError={() => console.log('Failed to load company logo')}
+                        />
+                      ) : (
+                        <Text style={styles.companyLogo}>{getCompanyLogo(job.company_name)}</Text>
+                      )}
+                    </View>
+                    <TouchableOpacity style={styles.bookmarkButton}>
+                      <Ionicons name="bookmark-outline" size={16} color="#999" />
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.jobCardTitle}>{job.title}</Text>
+                  <Text style={styles.jobCardCompany}>{job.company_name}</Text>
+                  <View style={styles.jobCardTags}>
+                    <View style={styles.jobTag}>
+                      <Text style={styles.jobTagText}>{job.experience_level || 'Entry Level'}</Text>
+                    </View>
+                    <View style={styles.jobTag}>
+                      <Text style={styles.jobTagText}>{job.type}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.jobCardFooter}>
+                    <Text style={styles.jobSalary}>{job.salary}</Text>
+                    <Text style={styles.jobLocation}>{job.location}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="briefcase-outline" size={48} color="#CCC" />
+              <Text style={styles.emptyStateText}>No job recommendations yet</Text>
+              <Text style={styles.emptyStateSubtext}>
+                Complete your profile and we'll find perfect matches for you!
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* Recent Jobs */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Recent Jobs</Text>
+            <TouchableOpacity>
+              <Text style={styles.seeAllText}>View All</Text>
+            </TouchableOpacity>
+          </View>
+          {recent.length > 0 ? (
+            recent.slice(0, 4).map((job, index) => (
+              <TouchableOpacity
+                key={job._id || `recent-${index}`}
+                style={styles.recentJobItem}
+                onPress={() => handleJobClick(job)}
+              >
+                <View style={styles.recentJobLeft}>
+                  <View style={styles.recentJobLogo}>
+                    {job.organization_logo || job.company_logo ? (
+                      <Image 
+                        source={{ uri: job.organization_logo || job.company_logo }} 
+                        style={styles.recentJobLogoImage}
+                        onError={() => console.log('Failed to load company logo')}
+                      />
+                    ) : (
+                      <Text style={styles.recentJobLogoText}>{getCompanyLogo(job.company_name)}</Text>
+                    )}
+                  </View>
+                  <View style={styles.recentJobInfo}>
+                    <Text style={styles.recentJobTitle}>{job.title}</Text>
+                    <Text style={styles.recentJobCompany}>{job.company_name} • {job.location}</Text>
+                  </View>
+                </View>
+                <TouchableOpacity style={styles.moreButton}>
+                  <Ionicons name="ellipsis-vertical" size={16} color="#999" />
+                </TouchableOpacity>
+              </TouchableOpacity>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="time-outline" size={48} color="#CCC" />
+              <Text style={styles.emptyStateText}>No recent jobs</Text>
+              <Text style={styles.emptyStateSubtext}>
+                Jobs will appear here once they're added to the database
+              </Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.bottomPadding} />
+      </ScrollView>
+
+      {/* Bottom Navigation */}
+      <View style={styles.bottomNav}>
+        <TouchableOpacity 
+          style={[styles.navItem, activeTab === 'home' && styles.navItemActive]}
+          onPress={() => setActiveTab('home')}
+        >
+          <Ionicons name="home" size={24} color={activeTab === 'home' ? '#000' : '#999'} />
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.navItem, activeTab === 'search' && styles.navItemActive]}
+          onPress={() => {
+            setActiveTab('search');
+            router.push('/specializations');
+          }}
+        >
+          <Ionicons name="document-text" size={24} color={activeTab === 'search' ? '#3B9EFF' : '#999'} />
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.navItem, activeTab === 'briefcase' && styles.navItemActive]}
+          onPress={() => setActiveTab('briefcase')}
+        >
+          <Ionicons name="briefcase" size={24} color={activeTab === 'briefcase' ? '#3B9EFF' : '#999'} />
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.navItem, activeTab === 'profile' && styles.navItemActive]}
+          onPress={() => {
+            setActiveTab('profile');
+            router.push('/profile');
+          }}
+        >
+          <Ionicons name="person" size={24} color={activeTab === 'profile' ? '#3B9EFF' : '#999'} />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { 
+    flex: 1, 
+    backgroundColor: '#FFFFFF' 
+  },
+  scrollContainer: { 
+    flex: 1 
+  },
+  loadingContainer: { 
+    flex: 1, 
+    alignItems: 'center', 
+    justifyContent: 'center' 
+  },
+  
+  // Header Styles
+  header: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 50,
+    paddingBottom: 20,
+    backgroundColor: '#FFFFFF'
+  },
+  welcomeText: { 
+    fontSize: 16, 
+    color: '#666', 
+    marginBottom: 4 
+  },
+  userName: { 
+    fontSize: 20, 
+    fontWeight: 'bold', 
+    color: '#000' 
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  refreshButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#E8F4FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  signOutButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFEBEE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notificationButton: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 20, 
+    backgroundColor: '#F5F5F5', 
+    alignItems: 'center', 
+    justifyContent: 'center' 
+  },
+  
+  // Last Update Styles
+  lastUpdateContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  lastUpdateText: {
+    fontSize: 12,
+    color: '#666',
+  },
+  
+  // Search Styles
+  searchContainer: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: '#F5F5F5', 
+    borderRadius: 12, 
+    marginHorizontal: 20, 
+    marginBottom: 20, 
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+  },
+  searchIcon: { 
+    marginRight: 10 
+  },
+  searchPlaceholder: {
+    flex: 1,
+    fontSize: 16,
+    color: '#999',
+  },
+  searchInput: { 
+    flex: 1, 
+    paddingVertical: 12, 
+    fontSize: 16, 
+    color: '#000' 
+  },
+  
+  // Promo Banner Styles
+  promoBanner: { 
+    backgroundColor: '#4285f4ff', 
+    borderRadius: 16, 
+    marginHorizontal: 20, 
+    marginBottom: 30, 
+    padding: 20, 
+    flexDirection: 'row', 
+    alignItems: 'center' 
+  },
+  promoContent: { 
+    flex: 1 
+  },
+  promoTitle: { 
+    fontSize: 18, 
+    fontWeight: 'bold', 
+    color: '#FFFFFF', 
+    lineHeight: 24, 
+    marginBottom: 15 
+  },
+  readMoreButton: { 
+    backgroundColor: '#FFFFFF', 
+    borderRadius: 8, 
+    paddingHorizontal: 16, 
+    paddingVertical: 8, 
+    alignSelf: 'flex-start' 
+  },
+  readMoreText: { 
+    fontSize: 14, 
+    fontWeight: '600', 
+    color: '#4285F4' 
+  },
+  promoImageContainer: { 
+    width: 80, 
+    height: 80, 
+    alignItems: 'center', 
+    justifyContent: 'center' 
+  },
+  promoEmoji: { 
+    fontSize: 60 
+  },
+  
+  // Section Styles
+  section: { 
+    marginBottom: 30, 
+    paddingHorizontal: 20 
+  },
+  sectionHeader: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 15 
+  },
+  sectionTitle: { 
+    fontSize: 18, 
+    fontWeight: 'bold', 
+    color: '#000', 
+    paddingLeft: 5,
+    paddingBottom: 20,
+  },
+  seeAllText: { 
+    fontSize: 14, 
+    color: '#4285F4', 
+    fontWeight: '600' 
+  },
+  
+  // Categories Styles
+  categoriesGrid: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between' 
+  },
+  categoryItem: { 
+    width: '22%', 
+    aspectRatio: 1, 
+    borderRadius: 12, 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    marginBottom: 8 
+  },
+  categoryText: { 
+    fontSize: 12, 
+    color: '#666', 
+    marginTop: 8, 
+    textAlign: 'center' 
+  },
+  categoryIcon: {
+    width: 80,
+    height: 50, // This will make the icons match the design better
+  },
+  categoryPlaceholder: {
+    fontSize: 32,
+  },
+  
+  // Suggested Jobs Styles
+  jobsHorizontal: { 
+    marginLeft: -20 
+  },
+  suggestedJobCard: { 
+    width: 200, 
+    backgroundColor: '#FFFFFF', 
+    borderRadius: 16, 
+    padding: 16, 
+    marginLeft: 20, 
+    shadowColor: '#000', 
+    shadowOffset: { width: 0, height: 2 }, 
+    shadowOpacity: 0.1, 
+    shadowRadius: 8, 
+    elevation: 4, 
+    borderWidth: 1, 
+    borderColor: '#F0F0F0' 
+  },
+  jobCardHeader: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 12 
+  },
+  companyLogoContainer: { 
+    width: 32, 
+    height: 32, 
+    borderRadius: 8, 
+    backgroundColor: '#F5F5F5', 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    overflow: 'hidden'
+  },
+  companyLogo: { 
+    fontSize: 16 
+  },
+  companyLogoImage: {
+    width: 32,
+    height: 32,
+    borderRadius: 8
+  },
+  bookmarkButton: { 
+    padding: 4 
+  },
+  jobCardTitle: { 
+    fontSize: 16, 
+    fontWeight: 'bold', 
+    color: '#000', 
+    marginBottom: 4 
+  },
+  jobCardCompany: { 
+    fontSize: 14, 
+    color: '#666', 
+    marginBottom: 12 
+  },
+  jobCardTags: { 
+    flexDirection: 'row', 
+    marginBottom: 12 
+  },
+  jobTag: { 
+    backgroundColor: '#F5F5F5', 
+    borderRadius: 6, 
+    paddingHorizontal: 8, 
+    paddingVertical: 4, 
+    marginRight: 6 
+  },
+  jobTagText: { 
+    fontSize: 12, 
+    color: '#666' 
+  },
+  jobCardFooter: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center' 
+  },
+  jobSalary: { 
+    fontSize: 14, 
+    fontWeight: 'bold', 
+    color: '#000' 
+  },
+  jobLocation: { 
+    fontSize: 12, 
+    color: '#666' 
+  },
+  
+  // Recent Jobs Styles
+  recentJobItem: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingVertical: 12, 
+    borderBottomWidth: 1, 
+    borderBottomColor: '#F0F0F0' 
+  },
+  recentJobLeft: { 
+    flex: 1, 
+    flexDirection: 'row', 
+    alignItems: 'center' 
+  },
+  recentJobLogo: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 8, 
+    backgroundColor: '#F5F5F5', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    marginRight: 12,
+    overflow: 'hidden'
+  },
+  recentJobLogoText: { 
+    fontSize: 18 
+  },
+  recentJobLogoImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 8
+  },
+  recentJobInfo: { 
+    flex: 1 
+  },
+  recentJobTitle: { 
+    fontSize: 16, 
+    fontWeight: '600', 
+    color: '#000', 
+    marginBottom: 2 
+  },
+  recentJobCompany: { 
+    fontSize: 14, 
+    color: '#666' 
+  },
+  moreButton: { 
+    padding: 8 
+  },
+  
+  // Empty State Styles
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+  },
+  emptyStateText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#666',
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  
+  // Bottom Navigation Styles
+  bottomNav: { 
+    flexDirection: 'row', 
+    backgroundColor: '#FFFFFF', 
+    paddingVertical: 16, 
+    paddingHorizontal: 24, 
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  navItem: { 
+    flex: 1, 
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+  },
+  navItemActive: {
+    backgroundColor: '#E8F4FF',
+    borderRadius: 16,
+  },
+  
+  bottomPadding: { 
+    height: 20 
+  }
+});
