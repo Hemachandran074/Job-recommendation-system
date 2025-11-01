@@ -1,15 +1,29 @@
 const express = require('express');
 const router = express.Router();
-const { getSuggestedJobs, getRecentJobs, getJobsBySpecialization } = require('../controllers/jobsController');
-const { getAllJobs, getJobById, storeJob } = require('../controllers/jobsController');
+const { 
+  getSuggestedJobs, 
+  getRecentJobs, 
+  getJobsBySpecialization,
+  getAllJobs, 
+  getJobById, 
+  storeJob,
+  refreshJobCache,
+  getCachedJobs
+} = require('../controllers/jobsController');
 
-// GET /api/v1/jobs/suggested/:userId
+// GET /api/v1/jobs/suggested/:userId - Dynamic skill-based job recommendations
 router.get('/suggested/:userId', getSuggestedJobs);
 
-// GET /api/v1/jobs/recent
+// GET /api/v1/jobs/cache/:userId - Get cached job recommendations
+router.get('/cache/:userId', getCachedJobs);
+
+// POST /api/v1/jobs/refresh-cache/:userId - Refresh job cache for user
+router.post('/refresh-cache/:userId', refreshJobCache);
+
+// GET /api/v1/jobs/recent - Recent jobs
 router.get('/recent', getRecentJobs);
 
-// GET /api/v1/jobs/specialization/:field
+// GET /api/v1/jobs/specialization/:field - Jobs by specialization (with optional user enhancement)
 router.get('/specialization/:field', getJobsBySpecialization);
 
 // GET /api/v1/jobs - list jobs (pagination)

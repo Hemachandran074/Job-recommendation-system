@@ -224,6 +224,18 @@ export const jobsAPI = {
   getSuggested: async (userId: string) => {
     const response = await api.get(`/jobs/suggested/${userId}`);
     return response.data;
+  },
+
+  // GET /api/v1/jobs/cache/:userId - Get cached jobs
+  getCachedJobs: async (userId: string) => {
+    const response = await api.get(`/jobs/cache/${userId}`);
+    return response.data;
+  },
+
+  // POST /api/v1/jobs/refresh-cache/:userId - Force refresh cache
+  refreshJobCache: async (userId: string) => {
+    const response = await api.post(`/jobs/refresh-cache/${userId}`);
+    return response.data;
   }
 };
 

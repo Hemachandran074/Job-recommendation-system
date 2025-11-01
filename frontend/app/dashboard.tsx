@@ -22,23 +22,91 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('home');
   const [lastFetchTime, setLastFetchTime] = useState<Date | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
-    loadData();
+    loadCachedDataOrFetch();
     
     // Set up auto-refresh every 30 minutes (1800000 ms)
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
       console.log('🔄 Auto-refreshing dashboard jobs (30-minute interval)...');
-      loadData();
+      await handleRefresh();
     }, 1800000); // 30 minutes
     
     // Cleanup interval on unmount
     return () => {
       clearInterval(interval);
     };
-  }, [profile]);
+  }, []);
+
+  // Load cached data first, then fetch fresh data only if cache is stale
+  const loadCachedDataOrFetch = async () => {
+    try {
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      
+      // Try to load cached data from AsyncStorage
+      const cachedRecommended = await AsyncStorage.getItem('dashboard_recommended_jobs');
+      const cachedRecent = await AsyncStorage.getItem('dashboard_recent_jobs');
+      const cachedTimestamp = await AsyncStorage.getItem('dashboard_cache_timestamp');
+      
+      if (cachedRecommended && cachedRecent && cachedTimestamp) {
+        const cacheAge = Date.now() - parseInt(cachedTimestamp);
+        const thirtyMinutes = 30 * 60 * 1000;
+        
+        // Load cached data immediately
+        setRecommended(JSON.parse(cachedRecommended));
+        setRecent(JSON.parse(cachedRecent));
+        setLastFetchTime(new Date(parseInt(cachedTimestamp)));
+        setLoading(false);
+        
+        console.log(`📦 Loaded cached jobs (${Math.floor(cacheAge / 60000)} minutes old)`);
+        
+        // Only fetch fresh data if cache is older than 30 minutes
+        if (cacheAge > thirtyMinutes) {
+          console.log('⏰ Cache is stale, fetching fresh data in background...');
+          loadData();
+        }
+      } else {
+        // No cache found, fetch fresh data
+        console.log('📭 No cache found, fetching fresh data...');
+        loadData();
+      }
+    } catch (error) {
+      console.error('❌ Error loading cached data:', error);
+      loadData();
+    }
+  };
+
+  // Handle manual refresh (when user clicks refresh button)
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    console.log('🔄 Manual refresh triggered');
+    
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const userId = await AsyncStorage.getItem('userId');
+    
+    if (userId) {
+      try {
+        // Force refresh the backend cache
+        await jobsAPI.refreshJobCache(userId);
+        console.log('✅ Backend cache refreshed');
+      } catch (error) {
+        console.error('❌ Failed to refresh backend cache:', error);
+      }
+    }
+    
+    // Fetch fresh data
+    await loadData();
+    setIsRefreshing(false);
+  };
 
   const handleSignOut = async () => {
+    // Clear dashboard cache on sign out
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    await AsyncStorage.removeItem('dashboard_recommended_jobs');
+    await AsyncStorage.removeItem('dashboard_recent_jobs');
+    await AsyncStorage.removeItem('dashboard_cache_timestamp');
+    
     await signOut();
     router.replace('/');
   };
@@ -76,90 +144,41 @@ export default function Dashboard() {
       let recommendedJobs: Internship[] = [];
       let recentJobs: Internship[] = [];
 
-      // DYNAMIC JOB FETCHING based on user profile
-      if (userId && profile) {
+      // ====================================================================
+      // 🔥 NEW DYNAMIC JOB FETCHING - Backend handles everything
+      // Backend fetches user skills, loops through each, deduplicates, and scores
+      // ====================================================================
+      if (userId) {
         try {
-          console.log('🚀 Fetching dynamic jobs from RapidAPI based on user profile...');
+          console.log('🎯 Fetching personalized job recommendations from backend...');
           
-          // Build search queries from user skills and technical domains
-          // Ensure we have arrays, even if profile data is missing or malformed
-          const userSkills = Array.isArray(profile.skills) ? profile.skills : [];
-          const technicalDomains = Array.isArray(profile.technical_domains) ? profile.technical_domains : [];
-          const preferredLocation = profile.preferred_city || profile.location || 'India';
+          // Use cached jobs for instant load (backend checks 30-min freshness)
+          const cachedResponse = await jobsAPI.getCachedJobs(userId);
           
-          console.log('🔍 Debug - User skills:', userSkills);
-          console.log('🔍 Debug - Technical domains:', technicalDomains);
+          // Extract jobs from response (handle both {data: [...]} and direct array)
+          const jobs = cachedResponse.data || cachedResponse;
           
-          // Combine skills and domains for comprehensive search
-          const combinedTerms = [...userSkills, ...technicalDomains];
-          const searchTerms = [...new Set(combinedTerms)].filter(term => term && term.trim()).slice(0, 5); // Top 5 unique terms
-          
-          console.log(`🎯 Search terms: ${searchTerms.length > 0 ? searchTerms.join(', ') : 'No search terms available'}`);
-          console.log(`📍 Preferred location: ${preferredLocation}`);
-          
-          // If no search terms, use default terms
-          if (searchTerms.length === 0) {
-            searchTerms.push('software engineer', 'developer');
-            console.log('⚠️ No skills in profile, using default search terms:', searchTerms.join(', '));
-          }
-
-          // Fetch jobs for each search term in parallel
-          const jobPromises = searchTerms.map(async (term) => {
-            try {
-              const result = await rapidapiAPI.searchJobsDynamic({
-                title_filter: term,
-                location_filter: preferredLocation,
-                limit: 10,
-                offset: 0,
-              });
-              return result.jobs || [];
-            } catch (error) {
-              console.error(`❌ Failed to fetch jobs for ${term}:`, error);
-              return [];
-            }
-          });
-
-          const jobResults = await Promise.all(jobPromises);
-          const allJobs = jobResults.flat();
-
-          // Transform and deduplicate jobs
-          const seenJobs = new Set<string>();
-          recommendedJobs = allJobs
-            .filter((job: any) => {
-              const key = `${job.title}_${job.company}`.toLowerCase();
-              if (seenJobs.has(key)) return false;
-              seenJobs.add(key);
-              return true;
-            })
-            .map((job: any) => ({
-              _id: `dynamic_${Date.now()}_${Math.random()}`,
-              id: `dynamic_${Date.now()}_${Math.random()}`,
-              title: job.title,
-              company_name: job.company,
-              location: job.location,
-              description: job.description,
-              skills_required: job.skills || [],
-              type: 'Full Time',
-              salary: 'Competitive',
-              company_logo: '',
-              organization_logo: '',
-              experience_level: 'Entry Level',
-              url: job.url || '',
-              created_at: new Date().toISOString(),
-            }))
-            .slice(0, 10); // Top 10 most relevant
-
-          console.log(`✅ Fetched ${recommendedJobs.length} dynamic jobs from RapidAPI`);
-          setLastFetchTime(new Date());
-
-          // Fallback to database recommendations if no dynamic jobs found
-          if (recommendedJobs.length === 0) {
-            console.log('⚠️ No dynamic jobs found, falling back to database recommendations...');
-            const recommendedData = await recommendationsAPI.getForUser(userId);
-            if (recommendedData.recommendations && recommendedData.recommendations.length > 0) {
-              const jobs = recommendedData.recommendations.map((rec: any) => rec.job);
-              recommendedJobs = jobs.slice(0, 10);
-              console.log(`📌 Loaded ${recommendedJobs.length} jobs from database`);
+          if (Array.isArray(jobs) && jobs.length > 0) {
+            recommendedJobs = jobs;
+            console.log(`✅ Loaded ${recommendedJobs.length} personalized jobs (dynamically fetched based on user skills)`);
+            console.log(`📊 Jobs sorted by skill match relevance (match_score)`);
+            setLastFetchTime(new Date());
+          } else {
+            console.log('⚠️ No cached jobs, trying live fetch...');
+            const liveResponse = await jobsAPI.getSuggested(userId);
+            const liveJobs = liveResponse.data || liveResponse;
+            
+            if (Array.isArray(liveJobs) && liveJobs.length > 0) {
+              recommendedJobs = liveJobs;
+              console.log(`✅ Loaded ${recommendedJobs.length} jobs from live fetch`);
+              setLastFetchTime(new Date());
+            } else {
+              console.log('⚠️ No dynamic jobs available, falling back to database recommendations...');
+              const recommendedData = await recommendationsAPI.getForUser(userId);
+              if (recommendedData.recommendations && recommendedData.recommendations.length > 0) {
+                recommendedJobs = recommendedData.recommendations.map((rec: any) => rec.job).slice(0, 10);
+                console.log(`📌 Loaded ${recommendedJobs.length} jobs from database (fallback)`);
+              }
             }
           }
         } catch (dynamicError: any) {
@@ -170,31 +189,19 @@ export default function Dashboard() {
           try {
             const recommendedData = await recommendationsAPI.getForUser(userId);
             if (recommendedData.recommendations && recommendedData.recommendations.length > 0) {
-              const jobs = recommendedData.recommendations.map((rec: any) => rec.job);
-              recommendedJobs = jobs.slice(0, 10);
+              recommendedJobs = recommendedData.recommendations.map((rec: any) => rec.job).slice(0, 10);
               console.log(`📌 Loaded ${recommendedJobs.length} jobs from database (fallback)`);
             }
           } catch (fallbackError) {
             console.error('❌ Fallback recommendations also failed:', fallbackError);
           }
         }
-      } else if (userId) {
-        console.log('⚠️ User profile not complete. Loading generic recommendations...');
-        try {
-          const recommendedData = await recommendationsAPI.getForUser(userId);
-          if (recommendedData.recommendations && recommendedData.recommendations.length > 0) {
-            const jobs = recommendedData.recommendations.map((rec: any) => rec.job);
-            recommendedJobs = jobs.slice(0, 10);
-          }
-        } catch (error) {
-          console.error('❌ Could not load recommendations:', error);
-        }
       }
 
       // Load recent jobs from database (for "Recent Jobs" section)
       try {
         console.log('🔍 Fetching recent jobs from database...');
-        const recentData = await jobsAPI.getAllJobs({ limit: 30, skip: 0 });
+        const recentData = await jobsAPI.getAllJobs({ limit: 10, skip: 0 });
         console.log('✅ Recent jobs:', recentData.length, 'jobs found');
         
         // Filter to get jobs from last 7 days
@@ -222,6 +229,13 @@ export default function Dashboard() {
       // Update state - replace with new jobs (don't append)
       setRecommended(recommendedJobs);
       setRecent(recentJobs);
+
+      // Cache the results in AsyncStorage for next time (reuse AsyncStorage from above)
+      const timestamp = Date.now().toString();
+      await AsyncStorage.setItem('dashboard_recommended_jobs', JSON.stringify(recommendedJobs));
+      await AsyncStorage.setItem('dashboard_recent_jobs', JSON.stringify(recentJobs));
+      await AsyncStorage.setItem('dashboard_cache_timestamp', timestamp);
+      console.log('💾 Cached dashboard data in AsyncStorage');
       
     } catch (error) {
       console.error('❌ Dashboard load error:', error);
@@ -289,12 +303,10 @@ export default function Dashboard() {
           <View style={styles.headerButtons}>
             <TouchableOpacity 
               style={styles.refreshButton} 
-              onPress={() => {
-                console.log('🔄 Manual refresh triggered');
-                loadData();
-              }}
+              onPress={handleRefresh}
+              disabled={isRefreshing}
             >
-              <Ionicons name="refresh" size={20} color="#3B9EFF" />
+              <Ionicons name="refresh" size={20} color={isRefreshing ? "#999" : "#3B9EFF"} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
               <Ionicons name="log-out-outline" size={20} color="#FF4444" />

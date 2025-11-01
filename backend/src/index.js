@@ -7,6 +7,7 @@ const morgan = require('morgan');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const jobsRoutes = require('./routes/jobs');
+const recommendationsRoutes = require('./routes/recommendations');
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.get('/', (req, res) => {
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/jobs', jobsRoutes);
+app.use('/api/v1/recommendations', recommendationsRoutes);
 
 // generic error handler
 app.use((err, req, res, next) => {
