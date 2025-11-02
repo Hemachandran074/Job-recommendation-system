@@ -35,4 +35,8 @@ router.get('/:id', getJobById);
 // POST /api/v1/jobs/store - store job when user clicks
 router.post('/store', storeJob);
 
+// POST /api/v1/jobs/extract - Extract structured fields from job description using LLM (GROQ)
+const { extractFromDescription } = require('../controllers/llmController');
+router.post('/extract', extractFromDescription);
+
 module.exports = router;
