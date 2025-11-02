@@ -24,74 +24,215 @@ export default function JobSearch() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const category = params.category as string || 'All Jobs';
+  const source = params.source as string; // 'suggested' or 'recent'
+  const fromDashboard = params.fromDashboard === 'true';
   
   const [jobs, setJobs] = useState<Internship[]>([]);
   const [filteredJobs, setFilteredJobs] = useState<Internship[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [lastFetchTime, setLastFetchTime] = useState<Date | null>(null);
 
-  // Load jobs on mount and when category changes
+  // Load jobs ONLY on first mount - check if already loaded in this session
   useEffect(() => {
-    loadJobs();
-  }, [category]);
-
-  // Auto-refresh jobs every 1 hour
-  useEffect(() => {
-    const refreshInterval = setInterval(() => {
-      console.log('🔄 Auto-refreshing jobs (1 hour interval)...');
-      loadJobs();
-    }, 60 * 60 * 1000); // 1 hour in milliseconds
-
-    return () => clearInterval(refreshInterval);
-  }, [category]);
+    loadJobsIfNeeded();
+  }, []);
 
   useEffect(() => {
     filterJobs();
   }, [jobs, searchQuery]);
 
+  const loadJobsIfNeeded = async () => {
+    try {
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      
+      // If coming from dashboard, load the cached suggested/recent jobs
+      if (fromDashboard && source) {
+        console.log(`📊 Loading ${source} jobs from dashboard cache`);
+        
+        const cacheKey = source === 'suggested' ? 'dashboard_recommended_jobs' : 'dashboard_recent_jobs';
+        const cachedJobs = await AsyncStorage.getItem(cacheKey);
+        
+        if (cachedJobs) {
+          const dashboardJobs = JSON.parse(cachedJobs);
+          console.log(`✅ Loaded ${dashboardJobs.length} ${source} jobs from dashboard`);
+          setJobs(dashboardJobs);
+          setLastFetchTime(new Date());
+          return;
+        } else {
+          console.warn('⚠️ No cached jobs found, loading fresh...');
+        }
+      }
+      
+      const sessionKey = `jobs_session_${category}`;
+      const hasLoadedInSession = await AsyncStorage.getItem(sessionKey);
+      
+      // If we've already loaded in this session and have cache, just load from cache
+      if (hasLoadedInSession === 'true') {
+        const cachedJobs = await AsyncStorage.getItem(`specialization_jobs_${category}`);
+        if (cachedJobs) {
+          const scrapedJobs = JSON.parse(cachedJobs);
+          console.log(`📦 Restored ${scrapedJobs.length} jobs from session cache`);
+          setJobs(scrapedJobs);
+          setLastFetchTime(new Date());
+          return; // Don't reload, just restore from cache
+        }
+      }
+      
+      // Mark that we're loading for this session
+      await AsyncStorage.setItem(sessionKey, 'true');
+      
+      // First time in this session, proceed with normal loading
+      loadJobs();
+    } catch (error) {
+      console.error('Error checking session:', error);
+      loadJobs();
+    }
+  };
+
   const loadJobs = async () => {
     try {
+      console.log('🔍 Loading jobs for category:', category);
+      
+      // Get AsyncStorage
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      const fromSpecialization = params.fromSpecialization === 'true';
+      const userId = params.userId as string;
+      
+      // First, try to load from cache instantly (no loading state)
+      const cachedJobs = await AsyncStorage.getItem(`specialization_jobs_${category}`);
+      if (cachedJobs && !fromSpecialization) {
+        // Load from cache instantly without showing loading
+        const scrapedJobs = JSON.parse(cachedJobs);
+        console.log(`📦 Instantly loaded ${scrapedJobs.length} cached jobs`);
+        setJobs(scrapedJobs);
+        setLastFetchTime(new Date());
+        return; // Don't show loading, just display cached jobs
+      }
+      
+      // If no cache or coming from specialization, show loading and scrape
       setLoading(true);
-      console.log('🔍 Fetching LIVE jobs for category:', category);
       
-      // Fetch jobs directly from RapidAPI (no database storage)
-      const response = await jobsAPI.fetchLiveJobs(category, 50);
+      // If coming from specialization page, scrape fresh jobs
+      if (fromSpecialization) {
+        console.log('🌐 Scraping fresh jobs from specialization click...');
+        
+        try {
+          // Call scraping API
+          const response = await jobsAPI.getBySpecialization(category, userId || undefined);
+          
+          if (response.status === 'ok' && response.data && response.data.length > 0) {
+            console.log(`✅ Scraped ${response.data.length} jobs for ${category}`);
+            
+            // Store scraped jobs in AsyncStorage for future use
+            await AsyncStorage.setItem(`specialization_jobs_${category}`, JSON.stringify(response.data));
+            
+            setJobs(response.data);
+            setLastFetchTime(new Date());
+            return; // Exit early after successful scraping
+          } else {
+            console.warn('⚠️ Scraping returned no jobs, falling back to cache/database');
+          }
+        } catch (scrapeError) {
+          console.error('❌ Scraping failed, falling back to cache/database:', scrapeError);
+        }
+      }
       
-      console.log(`📦 Fetched ${response.jobs?.length || 0} live jobs`);
+      // Check cache again (in case scraping failed or we're not from specialization)
+      const cachedJobsRetry = await AsyncStorage.getItem(`specialization_jobs_${category}`);
       
-      if (response.jobs && response.jobs.length > 0) {
-        setJobs(response.jobs);
+      if (cachedJobsRetry) {
+        // Use cached scraped jobs from previous scrape
+        const scrapedJobs = JSON.parse(cachedJobsRetry);
+        console.log(`📦 Loaded ${scrapedJobs.length} cached scraped jobs`);
+        setJobs(scrapedJobs);
         setLastFetchTime(new Date());
       } else {
-        setJobs([]);
+        // Final fallback: Load jobs from database
+        console.log('📊 No cached jobs, loading from database...');
+        const response = await jobsAPI.getAllJobs({ 
+          limit: 50,
+          skip: 0
+        });
+        
+        if (response.data && response.data.length > 0) {
+          // Filter jobs by category
+          const categoryLower = category.toLowerCase();
+          const filtered = response.data.filter((job: any) => {
+            const title = (job.title || '').toLowerCase();
+            const desc = (job.description || '').toLowerCase();
+            const skills = (job.skills || []).map((s: string) => s.toLowerCase()).join(' ');
+            
+            return title.includes(categoryLower) || 
+                   desc.includes(categoryLower) || 
+                   skills.includes(categoryLower);
+          });
+          
+          setJobs(filtered.length > 0 ? filtered : response.data);
+          console.log(`✅ Filtered to ${filtered.length} jobs from database`);
+        } else {
+          setJobs([]);
+        }
+        setLastFetchTime(new Date());
       }
       
     } catch (error: any) {
-      console.error('❌ Error loading live jobs:', error);
+      console.error('❌ Error loading jobs:', error);
+      Alert.alert(
+        'Error Loading Jobs', 
+        'Could not fetch jobs. Please check your connection and try again.',
+        [{ text: 'OK' }]
+      );
+      setJobs([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Manual refresh function - forces fresh scraping
+  const handleManualRefresh = async () => {
+    try {
+      setLoading(true);
+      console.log('🔄 Manual refresh - scraping fresh jobs...');
       
-      // Check if it's a 404 error (backend not restarted)
-      if (error.response?.status === 404) {
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      const userId = await AsyncStorage.getItem('userId');
+      
+      // Always scrape fresh jobs on manual refresh
+      try {
+        const response = await jobsAPI.getBySpecialization(category, userId || undefined);
+        
+        if (response.status === 'ok' && response.data && response.data.length > 0) {
+          console.log(`✅ Refreshed ${response.data.length} jobs for ${category}`);
+          
+          // Update cache with fresh data
+          await AsyncStorage.setItem(`specialization_jobs_${category}`, JSON.stringify(response.data));
+          
+          setJobs(response.data);
+          setLastFetchTime(new Date());
+          
+          Alert.alert(
+            'Jobs Updated',
+            `Successfully refreshed ${response.data.length} jobs!`,
+            [{ text: 'OK' }]
+          );
+        } else {
+          Alert.alert(
+            'No Jobs Found',
+            'Could not find jobs for this category. Try again later.',
+            [{ text: 'OK' }]
+          );
+        }
+      } catch (scrapeError: any) {
+        console.error('❌ Manual refresh failed:', scrapeError);
         Alert.alert(
-          'Backend Restart Required', 
-          'The backend server needs to be restarted to load the new job fetching feature.\n\n' +
-          'Steps:\n' +
-          '1. Stop the backend (Ctrl+C)\n' +
-          '2. Run: npm start\n' +
-          '3. Try again',
-          [{ text: 'OK' }]
-        );
-      } else {
-        Alert.alert(
-          'Error Loading Jobs', 
-          'Could not fetch jobs. Please check:\n' +
-          '- Backend server is running\n' +
-          '- RAPIDAPI_KEY is configured\n' +
-          '- Internet connection is active',
+          'Refresh Failed',
+          'Could not scrape fresh jobs. Please check your connection and try again.',
           [{ text: 'OK' }]
         );
       }
-      setJobs([]);
+    } catch (error: any) {
+      console.error('❌ Error in manual refresh:', error);
     } finally {
       setLoading(false);
     }
@@ -143,14 +284,42 @@ export default function JobSearch() {
   };
 
   const renderJobCard = (job: Internship) => {
-    const salaryText = job.salary || 
-      (job.salary_min && job.salary_max 
-        ? `$${job.salary_min}K - $${job.salary_max}K/Mo` 
-        : '$15K/Mo');
+    // Format salary
+    let salaryText = '';
+    if (job.salary_min && job.salary_max) {
+      // Convert to K format (thousands)
+      const minK = Math.round(job.salary_min / 1000);
+      const maxK = Math.round(job.salary_max / 1000);
+      salaryText = `$${minK}K-${maxK}K/Mo`;
+    } else if (job.salary) {
+      salaryText = job.salary;
+    } else {
+      salaryText = '$15K/Mo';
+    }
+
+    // Format time posted
+    const timePosted = job.created_at 
+      ? (() => {
+          const now = new Date();
+          const posted = new Date(job.created_at);
+          const diffMs = now.getTime() - posted.getTime();
+          const diffMins = Math.floor(diffMs / 60000);
+          const diffHours = Math.floor(diffMins / 60);
+          const diffDays = Math.floor(diffHours / 24);
+          
+          if (diffDays > 0) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+          if (diffHours > 0) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+          if (diffMins > 0) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+          return 'Just now';
+        })()
+      : '25 minute ago';
+
+    // Get first letter for logo
+    const logoLetter = (job.company || job.company_name || 'C').charAt(0).toUpperCase();
 
     return (
       <TouchableOpacity 
-        key={job._id || job.id} 
+        key={job.id || job._id || job.external_id} 
         style={styles.jobCard}
         onPress={() => handleJobPress(job)}
         activeOpacity={0.7}
@@ -158,15 +327,7 @@ export default function JobSearch() {
         {/* Header with Logo and More Button */}
         <View style={styles.cardHeader}>
           <View style={styles.companyLogo}>
-            {job.organization_logo ? (
-              <Text style={styles.logoText}>
-                {job.company_name?.charAt(0).toUpperCase() || 'C'}
-              </Text>
-            ) : (
-              <Text style={styles.logoText}>
-                {job.company_name?.charAt(0).toUpperCase() || 'C'}
-              </Text>
-            )}
+            <Text style={styles.logoText}>{logoLetter}</Text>
           </View>
           
           <TouchableOpacity style={styles.moreButton}>
@@ -175,11 +336,11 @@ export default function JobSearch() {
         </View>
 
         {/* Job Title */}
-        <Text style={styles.jobTitle} numberOfLines={1}>{job.title}</Text>
+        <Text style={styles.jobTitle} numberOfLines={2}>{job.title}</Text>
         
         {/* Company Name and Location */}
         <Text style={styles.companyInfo} numberOfLines={1}>
-          {job.company_name} • {job.location || 'Remote'}
+          {job.company || job.company_name} • {job.location || 'Remote'}
         </Text>
 
         {/* Tags */}
@@ -190,20 +351,16 @@ export default function JobSearch() {
           <View style={styles.tag}>
             <Text style={styles.tagText}>{job.job_type || 'Full time'}</Text>
           </View>
-          <View style={styles.tag}>
-            <Text style={styles.tagText}>
-              {job.experience_level || 'Senior designer'}
-            </Text>
-          </View>
+          {job.experience && (
+            <View style={styles.tag}>
+              <Text style={styles.tagText}>{job.experience}</Text>
+            </View>
+          )}
         </View>
 
         {/* Footer with Time and Salary */}
         <View style={styles.cardFooter}>
-          <Text style={styles.timeText}>
-            {job.created_at 
-              ? new Date(job.created_at).toLocaleDateString() 
-              : '25 minute ago'}
-          </Text>
+          <Text style={styles.timeText}>{timePosted}</Text>
           <Text style={styles.salaryText}>{salaryText}</Text>
         </View>
       </TouchableOpacity>
@@ -225,7 +382,7 @@ export default function JobSearch() {
             </Text>
           )}
         </View>
-        <TouchableOpacity onPress={loadJobs} style={styles.refreshButton} disabled={loading}>
+        <TouchableOpacity onPress={handleManualRefresh} style={styles.refreshButton} disabled={loading}>
           <Ionicons 
             name="refresh" 
             size={22} 
@@ -234,7 +391,7 @@ export default function JobSearch() {
         </TouchableOpacity>
       </View>
 
-      {/* Loading State */}
+      {/* Loading State - Only show when actually loading */}
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#3B9EFF" />
@@ -250,8 +407,8 @@ export default function JobSearch() {
               ? `No jobs match "${searchQuery}"`
               : `No jobs available for ${category} at the moment.`}
           </Text>
-          <TouchableOpacity style={styles.retryButton} onPress={loadJobs}>
-            <Text style={styles.retryButtonText}>Refresh</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={handleManualRefresh}>
+            <Text style={styles.retryButtonText}>Reload</Text>
           </TouchableOpacity>
         </View>
       ) : (

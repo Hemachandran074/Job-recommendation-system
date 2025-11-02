@@ -145,10 +145,10 @@ async function getPersonalizedRecommendations(req, res) {
 
     console.log(`🎯 Fetching recommendations for user: ${user_id}`);
 
-    // 1. Fetch user profile with skills from database
+    // 1. Fetch user profile with skills and preferred location from database
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('skills, interests, technical_domains')
+      .select('skills, interests, technical_domains, preferred_city, location')
       .eq('id', user_id)
       .single();
 
@@ -167,6 +167,15 @@ async function getPersonalizedRecommendations(req, res) {
       ...(profile.technical_domains || [])
     ].filter(Boolean); // Remove null/undefined values
 
+    // Get user's preferred location
+    const userLocation = profile?.preferred_city || profile?.location || null;
+    
+    if (userLocation) {
+      console.log(`📍 Using user's preferred location: ${userLocation}`);
+    } else {
+      console.log('📍 No preferred location set, searching all locations');
+    }
+
     if (allSkills.length === 0) {
       console.log('ℹ️ User has no skills defined, returning empty recommendations');
       return res.json({ 
@@ -178,8 +187,8 @@ async function getPersonalizedRecommendations(req, res) {
 
     console.log(`🎯 User skills (${allSkills.length}):`, allSkills);
 
-    // 3. Fetch detailed jobs dynamically for each skill
-    const rawJobs = await fetchDetailedJobsBySkills(allSkills, 2); // 2 detailed jobs per skill
+    // 3. Fetch detailed jobs dynamically for each skill with user's preferred location
+    const rawJobs = await fetchDetailedJobsBySkills(allSkills, 2, userLocation); // 2 detailed jobs per skill
 
     if (rawJobs.length === 0) {
       console.log('ℹ️ No jobs found for user skills');

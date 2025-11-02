@@ -19,10 +19,10 @@ async function getSuggestedJobs(req, res, next) {
     
     console.log(`📊 Fetching suggested jobs for user: ${userId}`);
     
-    // Fetch user profile with skills, interests, and technical domains
+    // Fetch user profile with skills, interests, technical domains, and preferred location
     const { data: profile, error: pErr } = await supabase
       .from('profiles')
-      .select('skills, interests, technical_domains')
+      .select('skills, interests, technical_domains, preferred_city, location')
       .eq('id', userId)
       .maybeSingle();
     
@@ -37,6 +37,15 @@ async function getSuggestedJobs(req, res, next) {
     const domains = (profile?.technical_domains || []);
     const allSkills = [...new Set([...skills, ...interests, ...domains])]; // Remove duplicates
 
+    // Get user's preferred location (preferred_city takes priority over location)
+    const userLocation = profile?.preferred_city || profile?.location || null;
+    
+    if (userLocation) {
+      console.log(`📍 User's preferred location: ${userLocation}`);
+    } else {
+      console.log('📍 No preferred location set, searching all locations');
+    }
+
     if (!allSkills.length) {
       console.log('ℹ️ No skills found for user, returning empty list');
       return res.json({ 
@@ -50,8 +59,8 @@ async function getSuggestedJobs(req, res, next) {
 
     let jobs = [];
     try {
-      // Dynamically scrape detailed jobs for each skill from Shine.com
-      jobs = await fetchDetailedJobsBySkills(allSkills, jobsPerSkill);
+      // Dynamically scrape detailed jobs for each skill from Shine.com with user's preferred location
+      jobs = await fetchDetailedJobsBySkills(allSkills, jobsPerSkill, userLocation);
       
       // Store fetched jobs in database
       const storedJobs = await storeJobsInDatabase(jobs);
@@ -135,51 +144,66 @@ async function getRecentJobs(req, res, next) {
  * Scrape jobs from Shine.com using specialization keyword.
  * Optionally accepts userId query param to fetch user's skills and merge with specialization.
  */
+/**
+ * GET /api/v1/jobs/specialization/:field
+ * Scrape and return jobs for a specific specialization
+ * Optionally enhanced with user's preferred location and skills
+ * Query params: userId (optional), location (optional)
+ */
 async function getJobsBySpecialization(req, res, next) {
   try {
     const { field } = req.params;
-    const { userId } = req.query; // Optional: enhance with user skills
+    const { userId } = req.query; // Optional: get user's location
     
     console.log(`🔍 Fetching jobs for specialization: ${field}`);
     
+    // ONLY search for the specialization field (no user skills added)
     let searchTerms = [field];
+    let userLocation = null;
     
-    // If userId provided, also include user skills
+    // If userId provided, get user's preferred location (but NOT skills)
     if (userId) {
       try {
         const { data: profile } = await supabase
           .from('profiles')
-          .select('skills, interests, technical_domains')
+          .select('preferred_city, location')
           .eq('id', userId)
           .maybeSingle();
         
         if (profile) {
-          const userSkills = [
-            ...(profile.skills || []),
-            ...(profile.interests || []),
-            ...(profile.technical_domains || [])
-          ];
+          // Get user's preferred location for filtering
+          userLocation = profile?.preferred_city || profile?.location || null;
           
-          // Add relevant user skills to search terms
-          searchTerms = [...new Set([field, ...userSkills.slice(0, 3)])]; // Top 3 user skills + specialization
-          console.log(`🎯 Enhanced search with user skills:`, searchTerms);
+          if (userLocation) {
+            console.log(`📍 Using user's preferred location: ${userLocation}`);
+          }
         }
       } catch (e) {
-        console.warn('⚠️ Could not fetch user skills, using specialization only');
+        console.warn('⚠️ Could not fetch user profile, using specialization only');
       }
     }
     
+    console.log(`🎯 Search terms: [${searchTerms.join(', ')}]`);
+    
     let jobs = [];
     try {
-      // Scrape jobs for all search terms from Shine.com
-      jobs = await fetchJobsByUserSkills(searchTerms, 20);
+      // Scrape detailed jobs for the specialization from Shine.com
+      console.log(`📡 Scraping detailed jobs for specialization "${field}"...`);
+      // Reduced to 10 jobs per search term for faster scraping (instead of 15)
+      jobs = await fetchDetailedJobsBySkills(searchTerms, 10, userLocation);
+      
+      // Store fetched jobs in database
+      if (jobs.length > 0) {
+        const storedJobs = await storeJobsInDatabase(jobs);
+        console.log(`💾 Stored ${storedJobs.length} jobs in database`);
+      }
       
       console.log(`✅ Found ${jobs.length} jobs for specialization "${field}"`);
     } catch (e) {
-      console.warn('⚠️ Shine.com scraping failed:', e.message);
+      console.error('❌ Shine.com scraping failed:', e.message);
       return res.json({ 
-        status: 'ok', 
-        message: 'Web scraping failed - returning no specialization jobs', 
+        status: 'error', 
+        message: 'Web scraping failed - could not fetch specialization jobs', 
         data: [] 
       });
     }
@@ -188,9 +212,12 @@ async function getJobsBySpecialization(req, res, next) {
       status: 'ok', 
       data: jobs,
       specialization: field,
-      search_terms: searchTerms
+      search_terms: searchTerms,
+      location: userLocation,
+      total: jobs.length
     });
   } catch (err) {
+    console.error('❌ Error in getJobsBySpecialization:', err);
     next(err);
   }
 }
@@ -332,7 +359,7 @@ async function storeJobsInDatabase(jobs) {
     return [];
   }
 
-  console.log(`💾 Storing ${jobs.length} jobs in database...`);
+  console.log(`💾 Attempting to store ${jobs.length} jobs in database...`);
   
   const jobsToInsert = jobs.map(job => {
     // Extract skills from job description or title
@@ -386,10 +413,15 @@ async function storeJobsInDatabase(jobs) {
     };
   });
 
+  console.log(`📝 Prepared ${jobsToInsert.length} jobs for insertion`);
+
   try {
     // Check if jobs with same external_id already exist to avoid duplicates
     const jobsWithExternalId = jobsToInsert.filter(job => job.external_id);
     const jobsWithoutExternalId = jobsToInsert.filter(job => !job.external_id);
+
+    console.log(`  - Jobs with external_id: ${jobsWithExternalId.length}`);
+    console.log(`  - Jobs without external_id: ${jobsWithoutExternalId.length}`);
 
     let allStoredJobs = [];
 
@@ -405,8 +437,12 @@ async function storeJobsInDatabase(jobs) {
       
       const existingIds = new Set((existingJobs || []).map(job => job.external_id));
       
+      console.log(`  - Found ${existingIds.size} existing jobs in database`);
+      
       // Only insert new jobs (not existing)
       const newJobs = jobsWithExternalId.filter(job => !existingIds.has(job.external_id));
+      
+      console.log(`  - Will insert ${newJobs.length} new jobs (${jobsWithExternalId.length - newJobs.length} already exist)`);
       
       if (newJobs.length > 0) {
         const { data: dataWithId, error: errorWithId } = await supabase
@@ -418,14 +454,15 @@ async function storeJobsInDatabase(jobs) {
           console.error('❌ Error inserting jobs with external_id:', errorWithId.message);
         } else {
           allStoredJobs = [...allStoredJobs, ...(dataWithId || [])];
+          console.log(`✅ Successfully inserted ${dataWithId?.length || 0} jobs with external_id`);
         }
       }
-      
-      console.log(`ℹ️ ${existingIds.size} jobs already exist, inserted ${newJobs.length} new jobs`);
     }
 
     // Insert jobs without external_id (may create duplicates)
     if (jobsWithoutExternalId.length > 0) {
+      console.log(`  - Inserting ${jobsWithoutExternalId.length} jobs without external_id (allowing duplicates)`);
+      
       const { data: dataWithoutId, error: errorWithoutId } = await supabase
         .from('jobs')
         .insert(jobsWithoutExternalId)
@@ -435,10 +472,11 @@ async function storeJobsInDatabase(jobs) {
         console.error('❌ Error inserting jobs without external_id:', errorWithoutId.message);
       } else {
         allStoredJobs = [...allStoredJobs, ...(dataWithoutId || [])];
+        console.log(`✅ Successfully inserted ${dataWithoutId?.length || 0} jobs without external_id`);
       }
     }
 
-    console.log(`✅ Successfully stored ${allStoredJobs.length} jobs in database`);
+    console.log(`✅ Total stored: ${allStoredJobs.length} jobs in database`);
     return allStoredJobs;
   } catch (err) {
     console.error('❌ Exception storing jobs:', err);
@@ -460,37 +498,41 @@ async function storeJobsInDatabase(jobs) {
 async function refreshJobCache(req, res, next) {
   try {
     const { userId } = req.params;
-    const forceRefresh = req.body.force || false;
+    const forceRefresh = req.body.force !== undefined ? req.body.force : true; // Default to true for manual refresh
     
-    console.log(`🔄 Refreshing job cache for user: ${userId}`);
+    console.log(`🔄 Refreshing job cache for user: ${userId} (force: ${forceRefresh})`);
     
-    // Check last refresh time (if using cache table)
-    const { data: cacheData } = await supabase
-      .from('job_cache')
-      .select('updated_at')
-      .eq('user_id', userId)
-      .maybeSingle();
-    
-    if (cacheData && !forceRefresh) {
-      const lastRefresh = new Date(cacheData.updated_at);
-      const now = new Date();
-      const diffMinutes = (now - lastRefresh) / (1000 * 60);
+    // Check last refresh time (if using cache table) - only if not forcing refresh
+    if (!forceRefresh) {
+      const { data: cacheData } = await supabase
+        .from('job_cache')
+        .select('updated_at')
+        .eq('user_id', userId)
+        .maybeSingle();
       
-      if (diffMinutes < 30) {
-        console.log(`ℹ️ Cache still fresh (${Math.round(diffMinutes)} min old), skipping refresh`);
-        return res.json({ 
-          status: 'ok', 
-          message: 'Cache is still fresh',
-          last_refresh: lastRefresh,
-          next_refresh_in_minutes: Math.round(30 - diffMinutes)
-        });
+      if (cacheData) {
+        const lastRefresh = new Date(cacheData.updated_at);
+        const now = new Date();
+        const diffMinutes = (now - lastRefresh) / (1000 * 60);
+        
+        if (diffMinutes < 30) {
+          console.log(`ℹ️ Cache still fresh (${Math.round(diffMinutes)} min old), skipping refresh`);
+          return res.json({ 
+            status: 'ok', 
+            message: 'Cache is still fresh',
+            last_refresh: lastRefresh,
+            next_refresh_in_minutes: Math.round(30 - diffMinutes)
+          });
+        }
       }
+    } else {
+      console.log('🔥 Force refresh requested - scraping fresh jobs');
     }
     
     // Fetch user skills
     const { data: profile } = await supabase
       .from('profiles')
-      .select('skills, interests, technical_domains')
+      .select('skills, interests, technical_domains, preferred_city, location')
       .eq('id', userId)
       .maybeSingle();
     
@@ -504,6 +546,15 @@ async function refreshJobCache(req, res, next) {
       ...(profile.technical_domains || [])
     ];
     
+    // Get user's preferred location
+    const userLocation = profile?.preferred_city || profile?.location || null;
+    
+    if (userLocation) {
+      console.log(`📍 Using user's preferred location: ${userLocation}`);
+    } else {
+      console.log('📍 No preferred location set, searching all locations');
+    }
+    
     if (allSkills.length === 0) {
       return res.json({ 
         status: 'ok', 
@@ -512,9 +563,9 @@ async function refreshJobCache(req, res, next) {
       });
     }
     
-    // Scrape fresh jobs from Shine.com
+    // Scrape fresh jobs from Shine.com with user's preferred location
     console.log(`📡 Scraping detailed jobs from Shine.com for ${allSkills.length} skills`);
-    const jobs = await fetchDetailedJobsBySkills(allSkills, 5); // 5 detailed jobs per skill
+    const jobs = await fetchDetailedJobsBySkills(allSkills, 5, userLocation); // 5 detailed jobs per skill
     
     // Store jobs in the jobs table (database)
     const storedJobs = await storeJobsInDatabase(jobs);

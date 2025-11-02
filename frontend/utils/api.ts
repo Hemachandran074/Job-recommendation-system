@@ -190,6 +190,18 @@ export const jobsAPI = {
     return response.data;
   },
 
+  // GET /api/v1/jobs/specialization/:field - Scrape jobs by specialization
+  getBySpecialization: async (specialization: string, userId?: string) => {
+    const params: any = {};
+    if (userId) params.userId = userId;
+    
+    const response = await api.get(`/jobs/specialization/${specialization}`, {
+      params,
+      timeout: 120000, // 120 seconds (2 minutes) for web scraping
+    });
+    return response.data;
+  },
+
   // GET /api/v1/jobs/{job_id}
   getJobDetails: async (jobId: string) => {
     const response = await api.get(`/jobs/${jobId}`);

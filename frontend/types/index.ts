@@ -48,7 +48,9 @@ export interface UserProfile {
 export interface Internship {
   _id: string;
   id?: string;
+  external_id?: string;
   company_name: string;
+  company?: string;
   company_logo?: string;
   organization_logo?: string;
   linkedin_org_description?: string;
@@ -56,6 +58,7 @@ export interface Internship {
   location: string;
   type: string;
   job_type?: string;
+  employment_type?: string;
   salary: string;
   salary_min?: number;
   salary_max?: number;
@@ -63,10 +66,16 @@ export interface Internship {
   description: string;
   skills?: string[];
   skills_required?: string[];
+  experience?: string;
   experience_level?: string;
   remote?: boolean;
   url?: string;
+  job_url?: string;
+  source?: string;
   created_at?: string;
+  updated_at?: string;
+  posted_date?: string;
+  fetched_at?: string;
   industry?: string;
   website?: string;
   head_office?: string;

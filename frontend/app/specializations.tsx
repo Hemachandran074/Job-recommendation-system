@@ -1,7 +1,8 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { jobsAPI } from '../utils/api';
 import React from 'react';
 
 // Job categories with icons
@@ -9,7 +10,7 @@ const CATEGORIES = [
   { 
     id: 'design', 
     name: 'Design', 
-    icon: 'palette-outline',
+    icon: 'pen-tool',
     color: '#E3F2FD',
     iconColor: '#2196F3'
   },
@@ -53,16 +54,38 @@ const CATEGORIES = [
 export default function Specializations() {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingCategory, setLoadingCategory] = useState<string | null>(null);
 
   const filteredCategories = CATEGORIES.filter(cat =>
     cat.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleCategoryPress = (category: typeof CATEGORIES[0]) => {
-    router.push({
-      pathname: '/job-search',
-      params: { category: category.name }
-    });
+  const handleCategoryPress = async (category: typeof CATEGORIES[0]) => {
+    try {
+      // Get user ID for personalized results
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      const userId = await AsyncStorage.getItem('userId');
+      
+      // Navigate immediately to job-search page with loading state
+      router.push({
+        pathname: '/job-search',
+        params: { 
+          category: category.name,
+          fromSpecialization: 'true',
+          userId: userId || ''
+        }
+      });
+      
+    } catch (error: any) {
+      console.error('❌ Error navigating to job search:', error);
+      
+      Alert.alert(
+        'Navigation Error',
+        `Could not navigate to job search. Please try again.`,
+        [{ text: 'OK' }]
+      );
+    }
   };
 
   return (
@@ -110,11 +133,21 @@ export default function Specializations() {
               ]}
               onPress={() => handleCategoryPress(category)}
               activeOpacity={0.7}
+              disabled={isLoading}
             >
-              <View style={[styles.iconContainer, { backgroundColor: '#FFF' }]}>
-                <Ionicons name={category.icon as any} size={40} color={category.iconColor} />
-              </View>
-              <Text style={styles.categoryName}>{category.name}</Text>
+              {loadingCategory === category.id ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="large" color={category.iconColor} />
+                  <Text style={styles.loadingText}>Scraping...</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={[styles.iconContainer, { backgroundColor: '#FFF' }]}>
+                    <Ionicons name={category.icon as any} size={40} color={category.iconColor} />
+                  </View>
+                  <Text style={styles.categoryName}>{category.name}</Text>
+                </>
+              )}
             </TouchableOpacity>
           ))}
         </View>
@@ -273,6 +306,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1A1A1A',
     textAlign: 'center',
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  loadingText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#666',
+    marginTop: 8,
   },
   
   // Bottom Navigation
