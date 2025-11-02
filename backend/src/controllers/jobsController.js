@@ -59,12 +59,50 @@ async function getSuggestedJobs(req, res, next) {
 
     let jobs = [];
     try {
-      // Dynamically scrape detailed jobs for each skill from Shine.com with user's preferred location
-      jobs = await fetchDetailedJobsBySkills(allSkills, jobsPerSkill, userLocation);
-      
-      // Store fetched jobs in database
-      const storedJobs = await storeJobsInDatabase(jobs);
-      console.log(`💾 Stored ${storedJobs.length} jobs in database`);
+      // First, try to fetch relevant jobs from the database to avoid re-scraping.
+      // Query jobs where skills overlap the user's skills and (optionally) location matches.
+      let existingJobs = [];
+      try {
+        let dbQuery = supabase.from('jobs').select('*');
+        if (userLocation) dbQuery = dbQuery.ilike('location', `%${userLocation}%`);
+        // Use overlaps to find jobs that mention any of the user's skills (skills should be stored as an array)
+        if (allSkills.length) dbQuery = dbQuery.overlaps('skills', allSkills);
+
+        const { data: dbData, error: dbErr } = await dbQuery.limit(100);
+        if (!dbErr && Array.isArray(dbData) && dbData.length > 0) {
+          existingJobs = dbData;
+          console.log(`🗄️ Found ${existingJobs.length} matching jobs in database, using cached results`);
+        }
+      } catch (eDb) {
+        console.warn('⚠️ DB lookup for existing jobs failed:', eDb.message || eDb);
+      }
+
+      // If we have enough existing jobs (avoid scraping), use them.
+      const enoughThreshold = Math.max(10, jobsPerSkill); // require at least this many cached jobs
+      if (existingJobs.length >= enoughThreshold) {
+        jobs = existingJobs;
+      } else {
+        // Not enough cached results: dynamically scrape detailed jobs for each skill from Shine.com with user's preferred location
+        jobs = await fetchDetailedJobsBySkills(allSkills, jobsPerSkill, userLocation);
+
+        // Store fetched jobs in database (deduplicates by external_id)
+        const storedJobs = await storeJobsInDatabase(jobs);
+        console.log(`💾 Stored ${storedJobs.length} jobs in database`);
+
+        // Merge stored jobs with any existing DB jobs we found earlier (avoid duplicates by external_id)
+        if (existingJobs.length > 0) {
+          const seen = new Set(existingJobs.map(j => j.external_id || j.id));
+          const merged = [...existingJobs];
+          for (const sj of storedJobs) {
+            const key = sj.external_id || sj.id;
+            if (!seen.has(key)) {
+              merged.push(sj);
+              seen.add(key);
+            }
+          }
+          jobs = merged;
+        }
+      }
       
       // Additional filtering: prioritize jobs that match multiple skills
       jobs = jobs.map(job => {
